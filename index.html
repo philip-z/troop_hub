@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Troop Hub</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <header>
+    <h1>Troop Hub</h1>
+    <div id="user"></div>
+    <button id="signin">Sign in with Google</button>
+    <button id="signout" hidden>Sign out</button>
+  </header>
+  <p id="msg" role="status"></p>
+
+  <main id="app" hidden>
+    <section>
+      <h2>Trips</h2>
+      <ul id="trips"></ul>
+    </section>
+
+    <section>
+      <h2>Equipment</h2>
+      <p><a id="equipment-link" target="_blank" rel="noopener">Submit equipment borrowed, assigned for cleaning, or returned</a></p>
+    </section>
+
+    <section id="leader" hidden>
+      <h2>Leader tools</h2>
+      <details><summary>Create new trip</summary>
+        <form id="trip-form">
+          <label>Name <input name="name" required></label>
+          <label>Date <input name="date" type="date" required></label>
+          <label>Location <input name="location"></label>
+          <label>Cost per scout ($) <input name="cost" type="number" min="0" step="0.01"></label>
+          <label>Description <textarea name="description"></textarea></label>
+          <button>Create trip</button>
+        </form>
+      </details>
+      <details><summary>Record payment for a trip</summary>
+        <form id="payment-form">
+          <label>Trip <select name="trip" class="trip-select" required></select></label>
+          <label>Scout name <input name="scout" required></label>
+          <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+          <label>Method <select name="method"><option>Cash</option><option>Check</option><option>Online</option></select></label>
+          <button>Record payment</button>
+        </form>
+      </details>
+      <details><summary>Record reimbursement</summary>
+        <form id="reimb-form">
+          <label>Trip <select name="trip" class="trip-select" required></select></label>
+          <label>Paid to <input name="payee" required></label>
+          <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+          <label>Notes <input name="notes"></label>
+          <button>Record reimbursement</button>
+        </form>
+      </details>
+    </section>
+
+    <section>
+      <h2>Meal planning tools</h2>
+      <form id="recipe-form">
+        <label>Recipe name <input name="name" required></label>
+        <label>Ingredients (one per line, e.g. "1 1/2 cups flour")
+          <textarea name="ingredients" rows="5" required></textarea></label>
+        <label>Recipe serves <input name="from" type="number" min="1" value="4" required></label>
+        <label>Number eating <input name="to" type="number" min="1" value="10" required></label>
+        <button>Add to meal plan</button>
+      </form>
+      <h3>Meals</h3><ul id="meals"></ul>
+      <h3>Combined shopping list</h3><ul id="shopping"></ul>
+      <button id="clear-meals" type="button">Clear meal plan</button>
+    </section>
+  </main>
+
+  <dialog id="slip-dialog">
+    <form id="slip-form" method="dialog">
+      <h3 id="slip-title"></h3>
+      <label>Scout name <input name="scout" required></label>
+      <label>Parent/guardian name <input name="parent" required></label>
+      <label>Emergency phone <input name="phone" type="tel" required></label>
+      <label>Medical notes / allergies <textarea name="medical"></textarea></label>
+      <label><input type="checkbox" name="agree" required> I give permission for my scout to attend this trip.</label>
+      <label>Signature (type full name) <input name="signature" required></label>
+      <button value="ok">Sign &amp; submit</button>
+      <button value="cancel" type="button" id="slip-cancel">Cancel</button>
+    </form>
+  </dialog>
+
+  <dialog id="receipt-dialog">
+    <form id="receipt-form" method="dialog">
+      <h3 id="receipt-title"></h3>
+      <label>Description <input name="description" required></label>
+      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+      <label>Receipt link (e.g. Drive photo URL) <input name="url" type="url"></label>
+      <button value="ok">Submit receipt</button>
+      <button value="cancel" type="button" id="receipt-cancel">Cancel</button>
+    </form>
+  </dialog>
+
+  <script src="config.js"></script>
+  <script src="lib.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
