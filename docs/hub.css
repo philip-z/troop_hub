@@ -1,0 +1,49 @@
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 0 auto; padding: 1rem; }
+
+header { display: flex; align-items: center; gap: .75rem 1rem; flex-wrap: wrap; }
+header .logo { height: 4rem; width: auto; flex: none; }
+header h1 { flex: 1 1 10rem; margin: 0; font-size: clamp(1.25rem, 5vw, 1.75rem); }
+header .account { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+
+label { display: block; margin: .5rem 0; }
+input, textarea, select { display: block; width: 100%; padding: .3rem; font: inherit; }
+input[type=checkbox] { display: inline; width: auto; }
+ul { padding-left: 0; list-style: none; }
+#trips li { border: 1px solid #ddd; border-radius: 6px; padding: .5rem; margin: .5rem 0; }
+#trips li .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+#trips li .actions a { align-self: center; }
+button { padding: .4rem .8rem; margin-right: .4rem; font: inherit; cursor: pointer; }
+#msg { min-height: 1.2em; font-weight: bold; }
+dialog { width: min(28rem, calc(100vw - 2rem)); }
+#receipt-preview { display: block; max-width: 100%; max-height: 12rem; margin: .5rem auto; border: 1px solid #ddd; }
+#receipt-preview[hidden] { display: none; }
+
+/* Tabs: one scrollable row, so they never wrap or squash on narrow screens. */
+.tabs {
+  display: flex; gap: .25rem; overflow-x: auto; scrollbar-width: thin;
+  border-bottom: 2px solid #ccc; margin-bottom: .75rem;
+  position: sticky; top: 0; background: #fff; z-index: 1;
+}
+.tabs [role=tab] {
+  flex: none; margin: 0; min-height: 2.75rem; padding: .5rem 1rem;
+  border: 0; border-bottom: 3px solid transparent; background: none; color: #444;
+  font-weight: 500; white-space: nowrap;
+}
+.tabs [role=tab]:hover { background: #f2f2f2; }
+.tabs [role=tab][aria-selected=true] { color: #1a56a0; border-bottom-color: #1a56a0; font-weight: 700; }
+.tabs [role=tab]:focus-visible { outline: 2px solid #1a56a0; outline-offset: -2px; }
+[role=tabpanel][hidden] { display: none; }
+
+/* Wide screens: tabs share the row evenly instead of crowding the left edge. */
+@media (min-width: 40rem) {
+  .tabs [role=tab] { flex: 1 1 0; }
+}
+
+/* Phones: tighter chrome, and the sign-in box wraps under the title. */
+@media (max-width: 30rem) {
+  body { padding: .5rem; }
+  header .logo { height: 3rem; }
+  header .account { width: 100%; }
+  .tabs [role=tab] { padding: .5rem .75rem; }
+}

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Troop 58 - Add a Trip</title>
+  <link rel="stylesheet" href="forms.css">
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+
+<body>
+  <div class="container">
+    <p class="back-link"><a href="index.html">&larr; Back to the Troop Hub</a></p>
+    <div class="signin">
+      <p id="signinPrompt">Sign in to add a trip. Only leaders with the add-trips permission can.</p>
+      <div id="signInBtn"></div>
+      <div id="signedIn" class="signed-in-status" hidden>
+        <span>Signed in as <strong id="signedInAs"></strong></span>
+        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+      </div>
+    </div>
+
+    <h2>Add a Trip</h2>
+
+    <form id="tripForm" hidden>
+      <p><strong>The new trip is live immediately for whichever forms you tick below.</strong></p>
+
+      <p id="copyRow" hidden><label for="copyFrom"><strong>Copy details from a previous trip</strong> (optional)</label><br>
+        <select id="copyFrom" class="input-long"><option value="">-- Start blank --</option></select><br>
+        <small>Fills in everything except the dates, month and what the trip is accepting.</small></p>
+      <p><label for="tripTitle"><strong>Trip title</strong> (required)</label><br>
+        <input type="text" id="tripTitle" name="tripTitle" required maxlength="500" class="input-long"></p>
+      <p><label for="tripLocation"><strong>Location</strong> (required)</label><br>
+        <input type="text" id="tripLocation" name="tripLocation" required maxlength="500" class="input-long"></p>
+      <p><label for="tripMonth"><strong>Trip month</strong> (required; used for the trip ID, e.g. 20261101)</label><br>
+        <input type="month" id="tripMonth" name="tripMonth" required class="input-long"></p>
+      <p><label for="tripDates"><strong>Dates</strong> (required, e.g. Nov 14-16, 2026)</label><br>
+        <input type="text" id="tripDates" name="tripDates" required maxlength="500" class="input-long"></p>
+      <p><label for="departureDetails"><strong>Meet for departure</strong> (place and time)</label><br>
+        <input type="text" id="departureDetails" name="departureDetails" maxlength="500" class="input-long"></p>
+      <p><label for="departureOptions"><strong>Departure options</strong> (optional, one per line). If you list any, parents must choose one on the permission slip.</label><br>
+        <textarea id="departureOptions" name="departureOptions" rows="4" class="input-long" placeholder="Friday 5:00 PM from church lot&#10;Saturday 8:00 AM from church lot"></textarea></p>
+      <p><label for="returnDetails"><strong>Return</strong></label><br>
+        <input type="text" id="returnDetails" name="returnDetails" maxlength="500" class="input-long"></p>
+      <p><label for="tripCost"><strong>Cost</strong></label><br>
+        <input type="text" id="tripCost" name="tripCost" maxlength="500" class="input-long"></p>
+      <p><label for="tripCoordinator"><strong>Coordinator / adult leader on trip</strong></label><br>
+        <input type="text" id="tripCoordinator" name="tripCoordinator" maxlength="500" class="input-long"></p>
+      <p><label for="tripUniform"><strong>Uniform</strong></label><br>
+        <input type="text" id="tripUniform" name="tripUniform" maxlength="500" class="input-long"></p>
+
+      <p><label><input type="checkbox" name="acceptingResponses" value="TRUE" checked> Accepting permission slips</label><br>
+        <label><input type="checkbox" name="acceptingReceipts" value="TRUE"> Accepting receipts</label><br>
+        <small>You can change these later in the Trips sheet (acceptingResponses / acceptingReceipts).</small></p>
+
+      <button type="submit" id="addTripBtn" disabled>Add Trip (goes live immediately)</button>
+    </form>
+    <div id="leaderMessage" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="add-trip.js"></script>
+</body>
+
+</html>

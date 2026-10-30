@@ -1,0 +1,11 @@
+body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 0 auto; padding: 1rem; }
+header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+header h1 { flex: 1; }
+section { border-top: 1px solid #ccc; margin-top: 1rem; padding-top: .5rem; }
+label { display: block; margin: .5rem 0; }
+input, textarea, select { display: block; width: 100%; box-sizing: border-box; padding: .3rem; }
+input[type=checkbox] { display: inline; width: auto; }
+ul { padding-left: 0; list-style: none; }
+#trips li { border: 1px solid #ddd; border-radius: 6px; padding: .5rem; margin: .5rem 0; }
+button { padding: .4rem .8rem; margin-right: .4rem; }
+#msg { min-height: 1.2em; font-weight: bold; }

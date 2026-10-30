@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Troop 58 Permission Slip</title>
+  <base target="_top">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Dancing+Script:wght@600&display=swap">
+  <link rel="stylesheet" href="forms.css">
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+
+<body>
+  <div class="container">
+    <p class="back-link"><a href="index.html">&larr; Back to the Troop Hub</a></p>
+    <div id="printHeader" class="print-header">YOUTH PERMISSION SLIP</div>
+
+    <form id="permissionForm" class="needs-signin">
+      <div class="signin">
+        <p id="signinPrompt">Sign in to view the trip details and fill out the permission slip.</p>
+        <div id="googleSignInBtn"></div>
+        <div id="signedInStatus" class="signed-in-status" hidden>
+          <span>Signed in as <strong id="signedInUser"></strong></span>
+          <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+        </div>
+      </div>
+      <img src="images/Troop58Logo.jpg" alt="Troop 58 Logo" class="troop-logo">
+
+      <!-- Honeypot: hidden from people, often filled by bots. Submissions with this filled are flagged, not rejected. -->
+      <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;">
+        <label for="website_url">Leave this field empty</label>
+        <input type="text" id="website_url" name="website_url" tabindex="-1" autocomplete="off">
+      </div>
+
+      <div class="form-header">
+        <label for="formType" class="sr-only">Form type</label>
+        <select id="formType" name="Form Type">
+          <option value="Youth" selected>YOUTH Permission Slip</option>
+          <option value="Adult">ADULT Permission Slip</option>
+        </select>
+      </div>
+
+      <h2>BSA Troop 58 Elsmere</h2>
+      <h2><span id="tripTitle">Loading...</span></h2>
+      <h3><span id="tripLocation"></span></h3>
+      <h3><span id="tripDates"></span></h3>
+
+      <div class="details">
+        <p>
+          <strong>Meet for Departure:</strong> <span id="customDepartureHtml"><span id="departureDetails"></span><br></span>
+          <strong>Return:</strong> <span id="returnDetails"></span><br>
+        </p>
+        <p>
+          <strong>Cost:</strong> <span id="tripCost"></span><br>
+          <strong>Checks payable to:</strong> "BSA Troop 58"<br>
+        </p>
+        <p>
+          <strong>Coordinator/Adult leader on Trip:</strong> <span id="tripCoordinator"></span><br>
+          <strong>Uniform:</strong> <span id="tripUniform"></span>
+        </p>
+      </div>
+
+      <fieldset id="youthSection" class="form-section">
+        <legend class="sr-only">Youth permission slip</legend>
+        <div id="scoutSelectorContainer" class="scout-selector" hidden>
+          <label for="scoutSelector"><strong>Select Scout to Pre-fill:</strong></label>
+          <select id="scoutSelector">
+            <option value="">-- Choose a Scout --</option>
+            <option value="new">+ Add Another Scout</option>
+          </select>
+        </div>
+        <div class="agreement">
+          <strong>The Scout Permission Slip:</strong><br>
+          <p>
+            Having full confidence that every precaution will be taken to ensure the safety of my child
+            <input type="text" id="scoutName" name="Youth Name" required placeholder="Scout Name" aria-label="Scout name" autocomplete="off">
+            , I hereby give permission for them to participate in the Troop 58 activity described above.
+          </p>
+
+          <p>
+            I waive all claims against the leaders of this trip and their families and give permission for them to seek
+            any emergency medical or surgical care deemed necessary for my son, should the need arise. I have indicated
+            below any additional concerns, medical or other, that apply to my child during this trip:
+          </p>
+
+          <p class="signature-disclaimer">
+            By typing your full legal name below and clicking Submit, you acknowledge that this typed name is your official, legal, and binding signature, equivalent to a handwritten signature.
+          </p>
+
+          <input type="text" id="youthParentSignature" name="Parent Signature" required placeholder="Parent/Guardian Signature" aria-label="Parent or guardian signature" autocomplete="off">
+          <input type="date" id="youthParentSignDate" name="Parent Signature Date" required aria-label="Parent signature date">
+          <input type="tel" id="emergencyContact" name="Youth Emergency Phone" required placeholder="Emergency Phone" aria-label="Emergency phone" inputmode="tel" autocomplete="tel">
+          <input type="tel" id="emergencyContact2" name="Youth Home Phone" placeholder="Home/Other Phone" aria-label="Home or other phone" inputmode="tel" autocomplete="tel">
+
+          <p>
+            *I have read and understand this form, and I agree to comply with Troop 58’s electronic device policies to
+            provide a distraction free outdoor experience for all participants.<br>
+            These policies currently include No Cell Phone use by scouts, no electronic games and no use of cameras in
+            tents.<br>
+            -Attending Adults will make their phones available to scouts if needed and will allow calls to coordinate
+            return time pickup.<br>
+            <strong>This is an outdoor activity; leave your electronic devices at home.</strong>
+          </p>
+
+          <p class="signature-disclaimer">
+            By typing your full legal name below and clicking Submit, you acknowledge that this typed name is your official, legal, and binding signature, equivalent to a handwritten signature.
+          </p>
+
+          <input type="text" id="scoutSignature" name="Youth Signature" required placeholder="Scout Signature" aria-label="Scout signature" autocomplete="off">
+          <input type="date" id="scoutSignDate" name="Youth Signature Date" required aria-label="Scout signature date">
+
+          <div>
+            <p>
+              <label for="youthMedication" class="inline">SCOUT Medication needed (to be held by an adult leader)</label>
+              <input type="text" id="youthMedication" name="Youth Medication" class="input-long">
+            </p>
+            <p>
+              <label for="youthAllergies" class="inline">Medical Conditions and/or Allergies:</label>
+              <input type="text" id="youthAllergies" name="Youth Allergies" class="input-long">
+            </p>
+            <p>
+              <label for="youthOther" class="inline">Other needs:</label>
+              <input type="text" id="youthOther" name="Youth Other Needs" class="input-long">
+            </p>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset id="adultSection" class="form-section" disabled hidden>
+        <legend class="sr-only">Adult permission slip</legend>
+        <div class="agreement">
+          <strong>I</strong>
+          <input type="text" id="adultName" name="Adult Name" required placeholder="Insert Name" aria-label="Adult name" autocomplete="name">
+          <strong>am over 18 years of age</strong>
+          and will participate in the Troop 58 activity described above.
+
+          <p class="radio-line">
+            I can drive if needed,
+            <label class="inline"><input type="radio" name="drive" value="To"> To</label>
+            <label class="inline"><input type="radio" name="drive" value="From"> From;</label>
+            <label class="inline"><input type="radio" name="drive" value="Both"> both ways.</label>
+            <label class="inline"><input type="radio" name="drive" value="Prefer not to drive"> I would prefer not to drive.</label>
+            <label class="inline"><input type="radio" name="drive" value="Cannot drive"> I cannot drive.</label>
+          </p>
+
+          <div class="training">
+            <strong>Adults Training:</strong><br>
+            <label class="inline">Youth Protection Training
+              <input type="date" id="yptDate" name="Ypt Date"></label><br>
+            <label class="inline">Hazardous Weather Training
+              <input type="date" id="hwDate" name="Hw Date"></label><br>
+            <label class="inline">BSA Lifeguard
+              <input type="date" id="blgDate" name="Blg Date"></label>
+            <label class="inline">Safe Swim Defense
+              <input type="date" id="ssdDate" name="Ssd Date"></label><br>
+            <label class="inline">First Aid
+              <input type="date" id="faDate" name="Fa Date"></label>
+            <label class="inline">Safety Afloat
+              <input type="date" id="saDate" name="Sa Date"></label><br>
+            <label class="inline">CPR certification
+              <input type="date" id="cprDate" name="Cpr Date"></label><br>
+          </div>
+
+          <div class="vehicle">
+            Drivers Insurance and Car Info:
+            <label class="inline">Valid Drivers License Yes
+            <input type="text" name="Veh License" placeholder="initial"></label><br>
+            <label class="inline">Vehicle Plate<input type="text" name="Veh Plate #" placeholder="Plate #"><input type="text" name="Veh State" placeholder="State"></label><br>
+            <label class="inline">Year <input type="number" name="Veh Year" inputmode="numeric"></label>
+            <label class="inline">Make <input type="text" name="Veh Make" id="vehMake" list="vehMakeList" autocomplete="off"></label>
+            <label class="inline">Model <input type="text" name="Veh Model" id="vehModel" list="vehModelList" autocomplete="off"></label><br>
+            <label class="inline"># of Seat belts <input type="number" name="Veh Seats" inputmode="numeric"></label><br>
+            <label class="inline">Comfortable Passenger Limit <input type="number" name="Veh Passengers" inputmode="numeric"></label>
+            <span class="footnote">(Includes driver)</span><br>
+            <datalist id="vehMakeList"></datalist>
+            <datalist id="vehModelList"></datalist>
+            <label class="inline">Current Insurance Yes
+              <input type="text" name="Veh Insurance" placeholder="initial"></label>
+          </div>
+
+          <p>
+            All participants are expected to abide by and follow safe scouting instruction/guidelines at all times.
+            Please refer to www.myscouting.org and the scout handbook for this information. You can take online
+            training there too!<br>
+            I waive all claims against the leaders of this trip and their families and give permission for them to seek
+            any emergency medical or surgical care deemed necessary for me, should the need arise. I have indicated
+            below any additional concerns, medical or other, that apply to me during this trip:
+          </p>
+
+          <p class="signature-disclaimer">
+            By typing your full legal name below and clicking Submit, you acknowledge that this typed name is your official, legal, and binding signature, equivalent to a handwritten signature.
+          </p>
+
+          <input type="text" id="adultSignature" name="Adult Signature" required placeholder="Adult signature" aria-label="Adult signature" autocomplete="off">
+          <input type="date" id="adultSignDate" name="Adult Signature Date" required aria-label="Adult signature date">
+          <input type="tel" id="cellPhone" name="Adult Cell Phone" placeholder="Adult Cell Phone" aria-label="Adult cell phone" inputmode="tel" autocomplete="tel">
+          <input type="tel" id="emergencyPhone" name="Adult Emergency Phone" required placeholder="Emergency Phone" aria-label="Emergency phone" inputmode="tel">
+
+          <div>
+            <p>
+              <label for="adultMedication" class="inline">ADULT Medication needed</label>
+              <input type="text" id="adultMedication" name="Adult Medication" class="input-long">
+            </p>
+            <p>
+              <label for="adultAllergies" class="inline">Medical Conditions and/or Allergies:</label>
+              <input type="text" id="adultAllergies" name="Adult Allergies" class="input-long">
+            </p>
+            <p>
+              <label for="adultOther" class="inline">Other needs:</label>
+              <input type="text" id="adultOther" name="Adult Other Needs" class="input-long">
+            </p>
+          </div>
+        </div>
+      </fieldset>
+
+      <button type="submit" id="submitBtn">Submit Permission Slip</button>
+    </form>
+    <div id="message" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="slip.js"></script>
+</body>
+
+</html>

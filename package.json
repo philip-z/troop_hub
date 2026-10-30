@@ -1,0 +1,13 @@
+{
+  "name": "troop-hub",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "clasp:login": "clasp login",
+    "push": "clasp push",
+    "dev": "node dev/server.js"
+  },
+  "devDependencies": {
+    "@google/clasp": "^3.0.0"
+  }
+}
