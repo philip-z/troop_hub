@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Troop Hub</title>
+  <link rel="stylesheet" href="hub.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <header>
+    <img src="images/Troop58Logo.jpg" alt="Troop 58 logo" class="logo">
+    <h1>Troop 58 Hub</h1>
+    <div class="account">
+      <div id="user"></div>
+      <div id="signin"></div>
+      <button id="signout" hidden>Sign out</button>
+    </div>
+  </header>
+  <p id="msg" role="status"></p>
+
+  <main id="app" hidden>
+    <div class="tabs" role="tablist" aria-label="Hub sections">
+      <button role="tab" id="tab-trips" aria-controls="panel-trips" aria-selected="true">Trips</button>
+      <button role="tab" id="tab-equipment" aria-controls="panel-equipment" aria-selected="false" tabindex="-1">Equipment</button>
+      <button role="tab" id="tab-meals" aria-controls="panel-meals" aria-selected="false" tabindex="-1">Meal planning</button>
+    </div>
+
+    <section role="tabpanel" id="panel-trips" aria-labelledby="tab-trips">
+      <p id="add-trip" hidden><a href="add-trip.html">Add a new trip</a></p>
+      <ul id="trips"></ul>
+    </section>
+
+    <section role="tabpanel" id="panel-equipment" aria-labelledby="tab-equipment" hidden>
+      <p><a id="equipment-link" target="_blank" rel="noopener">Submit equipment borrowed, assigned for cleaning, or returned</a></p>
+      <h3>Troop equipment</h3>
+      <label>Search <input id="equipment-filter" type="search" placeholder="e.g. tent"></label>
+      <p id="equipment-status" role="status"></p>
+      <ul id="equipment"></ul>
+    </section>
+
+    <section role="tabpanel" id="panel-meals" aria-labelledby="tab-meals" hidden>
+      <form id="recipe-form">
+        <label id="recipe-pick-row" hidden>Start from a troop recipe
+          <select id="recipe-pick"><option value="">-- Choose a recipe --</option></select></label>
+        <label>Recipe name <input name="name" required></label>
+        <label>Ingredients (one per line, e.g. "1 1/2 cups flour")
+          <textarea name="ingredients" rows="5" required></textarea></label>
+        <label>Recipe serves <input name="from" type="number" min="1" value="4" required></label>
+        <label>Number eating <input name="to" type="number" min="1" value="10" required></label>
+        <button>Add to meal plan</button>
+      </form>
+      <h3>Meals</h3><ul id="meals"></ul>
+      <h3>Combined shopping list</h3><ul id="shopping"></ul>
+      <button id="clear-meals" type="button">Clear meal plan</button>
+    </section>
+  </main>
+
+  <dialog id="receipt-dialog">
+    <form id="receipt-form" method="dialog">
+      <h3 id="receipt-title"></h3>
+      <label>Description <input name="description" required></label>
+      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+      <label>Photo of the receipt (optional)
+        <input name="photo" id="receipt-photo" type="file" accept="image/*"></label>
+      <img id="receipt-preview" alt="Receipt preview" hidden>
+      <button value="ok" id="receipt-submit">Submit receipt</button>
+      <button value="cancel" type="button" id="receipt-cancel">Cancel</button>
+    </form>
+  </dialog>
+
+  <dialog id="payment-dialog">
+    <form id="payment-form" method="dialog">
+      <h3 id="payment-title"></h3>
+      <label>Participant name <input name="participant" required></label>
+      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+      <label>Method <select name="method"><option>Check</option><option>Cash</option><option>Online</option></select></label>
+      <button value="ok">Record payment</button>
+      <button value="cancel" type="button" id="payment-cancel">Cancel</button>
+    </form>
+  </dialog>
+
+  <dialog id="reimb-dialog">
+    <form id="reimb-form" method="dialog">
+      <h3 id="reimb-title"></h3>
+      <label>Paid to <input name="payee" required></label>
+      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+      <label>Notes <input name="notes"></label>
+      <button value="ok">Record reimbursement</button>
+      <button value="cancel" type="button" id="reimb-cancel">Cancel</button>
+    </form>
+  </dialog>
+
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="lib.js"></script>
+  <script src="hub.js"></script>
+</body>
+</html>

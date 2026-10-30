@@ -1,0 +1,467 @@
+/* ---------- Existing CSS ---------- */
+.form-header {
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.form-header select {
+  font-size: 1.5rem;
+  font-weight: bold;
+  padding: 6px 12px;
+  border: 2px solid #0055a5;
+  border-radius: 6px;
+  background-color: #f8fbfd;
+  color: #1a237e;
+  cursor: pointer;
+  outline: none;
+}
+
+.form-header select:focus {
+  border-color: #003366;
+  box-shadow: 0 0 5px rgba(0, 85, 165, 0.3);
+}
+
+/* Generic selector for any field containing "signature" in name or placeholder */
+input[placeholder*="initial" i],
+input[name*="signature" i] {
+  font-family: 'Caveat', cursive;
+  font-size: 24px;
+  color: #1a237e;
+  border: none;
+  border-bottom: 2px solid #333;
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 4px;
+  outline: none;
+}
+
+/* Generic placeholder styling for signature fields */
+input[placeholder*="initial" i]::placeholder,
+input[name*="signature" i]::placeholder {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: #777;
+  font-weight: normal;
+}
+
+/* Generic focus line */
+input[placeholder*="initial" i]:focus,
+input[name*="signature" i]:focus {
+  border-bottom-color: #0055a5;
+  background-color: #f8fbff;
+}
+
+/* Ensure signature fields have plenty of room to sign */
+input[name*="signature" i] {
+  width: 100%;
+}
+
+/* Keep initial fields short and inline */
+input[placeholder*="initial" i] {
+  width: 60px;
+  text-align: center;
+}
+
+body {
+  font-family: 'Times New Roman', Times, serif;
+  margin: 0;
+  padding: 20px;
+  background-color: #f4f4f9;
+}
+
+.container {
+  max-width: 800px;
+  margin: auto;
+  background: white;
+  padding: 40px;
+  border: 1px solid #ccc;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  position: relative;
+}
+
+.troop-logo {
+  position: absolute;
+  top: 80px;
+  left: 40px;
+  width: 150px;
+  height: auto;
+}
+
+.back-link {
+  margin: 0 0 10px;
+}
+
+h1,
+h2,
+h3 {
+  text-align: center;
+  margin: 5px 0;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+.details {
+  margin: 25px 0;
+  line-height: 1.6;
+  font-size: 16px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+label {
+  font-weight: bold;
+  display: block;
+  margin-bottom: 5px;
+}
+
+label.inline {
+  display: inline;
+  font-weight: normal;
+  margin: 0;
+}
+
+.input-long {
+  width: 100%;
+}
+
+input[type="text"],
+input[type="date"],
+input[type="tel"],
+input[type="number"] {
+  padding: 10px;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+input[type="number"] {
+  width: 80px;
+}
+
+.radio-group {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.radio-group label {
+  display: inline;
+  font-weight: normal;
+  margin-bottom: 0;
+}
+
+.agreement {
+  margin: 30px 0;
+  padding: 20px;
+  border: 2px solid #000;
+  background-color: #fafafa;
+}
+
+button {
+  background-color: #0055A5;
+  color: white;
+  padding: 12px 20px;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  display: block;
+  width: 100%;
+  margin-top: 30px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+button:hover {
+  background-color: #004080;
+}
+
+#message {
+  text-align: center;
+  margin-top: 20px;
+  font-weight: bold;
+  color: #2e7d32;
+  font-size: 18px;
+}
+
+hr {
+  margin: 30px 0;
+  border: 0;
+  border-top: 1px solid #ccc;
+}
+
+/* ---------- Additions ---------- */
+.signin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+
+#permissionForm:not(.needs-signin) #signinPrompt {
+  display: none;
+}
+
+/* Until someone signs in, the slip shows only the sign-in box. */
+#permissionForm.needs-signin > :not(.signin) {
+  display: none;
+}
+
+.signin[hidden] {
+  display: none;
+}
+
+.troop-email-auth {
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.troop-remember {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.85rem;
+}
+
+.troop-remember input {
+  width: auto;
+  min-height: 0;
+}
+
+.troop-email-auth[hidden] {
+  display: none;
+}
+
+.troop-email-auth input {
+  width: auto;
+  max-width: 12rem;
+}
+
+.troop-email-auth .link-btn {
+  background: none;
+  width: auto;
+  display: inline;
+  margin: 0;
+  padding: 0;
+  color: #1a56a0;
+  text-decoration: underline;
+  font-size: inherit;
+  font-weight: normal;
+}
+
+.signed-in-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+}
+
+.signed-in-status[hidden] {
+  display: none;
+}
+
+.signed-in-status .link-btn,
+.signed-in-status .link-btn:hover {
+  background: none;
+  width: auto;
+  display: inline;
+  margin: 0;
+  padding: 0;
+  color: #1a56a0;
+  text-decoration: underline;
+  font-size: inherit;
+  font-weight: normal;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+fieldset.form-section {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.scout-selector {
+  background: #eef5fc;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+}
+
+.scout-selector select {
+  width: 100%;
+  padding: 8px;
+  margin-top: 5px;
+}
+
+.print-header {
+  display: none;
+  text-align: center;
+  margin-bottom: 12px;
+  font-size: 18px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.signature-disclaimer {
+  font-size: 0.92rem;
+  line-height: 1.4;
+  margin: 12px 0;
+  color: #333;
+}
+
+.footnote {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: #555;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 8px;
+  }
+
+  .container {
+    padding: 16px;
+  }
+
+  .troop-logo {
+    position: static;
+    display: block;
+    width: 110px;
+    margin: 0 auto 10px;
+  }
+
+  .signin {
+    justify-content: center;
+  }
+
+  .form-header select {
+    font-size: 1.1rem;
+    width: 100%;
+  }
+
+  .agreement {
+    padding: 12px;
+  }
+
+  .agreement input[type="text"],
+  .agreement input[type="date"],
+  .agreement input[type="tel"],
+  .agreement input[type="number"] {
+    display: block;
+    width: 100%;
+    margin: 6px 0 12px;
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .agreement input[type="radio"] {
+    width: auto;
+    min-height: 0;
+    margin: 0 4px;
+    transform: scale(1.3);
+  }
+
+  .agreement input[placeholder*="initial" i] {
+    display: inline-block;
+    width: 80px;
+  }
+
+  .training label.inline,
+  .vehicle label.inline {
+    display: block;
+    margin-top: 8px;
+  }
+
+  .training br,
+  .vehicle br {
+    display: none;
+  }
+
+  button {
+    min-height: 48px;
+    font-size: 18px;
+  }
+}
+
+#submitOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#submitOverlay[hidden] {
+  display: none;
+}
+
+#submitOverlay .submit-box {
+  text-align: center;
+  font-weight: bold;
+}
+
+#submitOverlay .spinner {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  border: 6px solid #d0d7de;
+  border-top-color: #1f4e8c;
+  border-radius: 50%;
+  animation: submit-spin 0.9s linear infinite;
+}
+
+@keyframes submit-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media print {
+  #submitOverlay {
+    display: none;
+  }
+
+  body {
+    background: #fff;
+    padding: 0;
+  }
+
+  .container {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    max-width: 100%;
+  }
+
+  .signin,
+  .back-link,
+  button,
+  #message {
+    display: none;
+  }
+
+  .troop-logo {
+    top: 40px;
+  }
+
+  .print-header {
+    display: block;
+  }
+}
