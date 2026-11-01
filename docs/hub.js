@@ -59,7 +59,25 @@
     $("signin").hidden = true; $("signout").hidden = false; $("app").hidden = false;
     $("user").textContent = email;
     $("add-trip").hidden = !perms.addTrips;
-    $("equipment-link").href = C.EQUIPMENT_FORM_URL;
+    if (perms.addTrips) {
+      const addTripP = $("add-trip");
+      if (!addTripP.querySelector("button")) {
+        addTripP.textContent = "";
+        const addTripBtn = document.createElement("button");
+        addTripBtn.textContent = "Add a new trip";
+        addTripBtn.onclick = () => { location.href = "add-trip.html"; };
+        addTripP.append(addTripBtn);
+      }
+    }
+    const eqLink = $("equipment-link");
+    if (eqLink && !eqLink.querySelector("button") && eqLink.tagName !== "BUTTON") {
+      const p = eqLink.parentElement;
+      p.textContent = "";
+      const eqBtn = document.createElement("button");
+      eqBtn.textContent = "Submit equipment borrowed, assigned for cleaning, or returned";
+      eqBtn.onclick = () => { window.open(C.EQUIPMENT_FORM_URL, "_blank"); };
+      p.append(eqBtn);
+    }
     selectTab(location.hash.slice(1), false);
     if (!trips.length) {
       await loadTrips();
@@ -151,10 +169,17 @@
       const actions = document.createElement("div"); actions.className = "actions";
       li.append(h, p, actions);
       const button = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; actions.append(b); };
+      const navButton = (label, url) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.type = "button";
+        b.onclick = () => { location.href = url; };
+        actions.append(b);
+      };
       if (t.acceptingResponses) {
-        const a = document.createElement("a"); a.textContent = "Permission slip"; a.href = "slip.html?trip=" + encodeURIComponent(t.id);
-        actions.append(a);
+        navButton("Permission slip", "slip.html?trip=" + encodeURIComponent(t.id || t.tripId));
       }
+      navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.id || t.tripId));
       if (t.acceptingReceipts) button("Submit receipt", () => openReceipt(t));
       if (perms.recordPayments) button("Record payment", () => openPayment(t));
       if (perms.recordReimbursements) button("Record reimbursement", () => openReimbursement(t));

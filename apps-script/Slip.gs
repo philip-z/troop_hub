@@ -242,6 +242,7 @@ function getUserProfile(userEmail) {
           'Youth Name': col(r, 'Scout Name'),
           'Birth Month': col(r, 'Birth Month'),
           'Home Patrol': col(r, 'Home Patrol'),
+          'Gender': col(r, 'Gender'),
           'Authorized Emails': col(r, 'Authorized Emails'),
           'Youth Emergency Phone': col(r, 'Emergency Phone'),
           'Youth Home Phone': col(r, 'Emergency Phone 2'),
@@ -262,7 +263,7 @@ function saveProfileAndYouth_(writerEmail, profileData) {
   var scoutName = String(profileData['Youth Name'] || profileData['Scout Name'] || '').trim();
   if (!scoutName) return;
 
-  var headers = ['Scout Name', 'Birth Month', 'Home Patrol', 'Authorized Emails', 'Emergency Phone', 'Emergency Phone 2', 'Medical Notes'];
+  var headers = ['Scout Name', 'Birth Month', 'Home Patrol', 'Gender', 'Authorized Emails', 'Emergency Phone', 'Emergency Phone 2', 'Medical Notes'];
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(headers);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
@@ -297,6 +298,7 @@ function saveProfileAndYouth_(writerEmail, profileData) {
     scoutName,
     String(profileData['Birth Month'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Birth Month')] : '')).trim(),
     String(profileData['Home Patrol'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Home Patrol')] : '')).trim(),
+    String(profileData['Gender'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Gender')] : '')).trim(),
     authEmailsList.join(', '),
     String(profileData['Youth Emergency Phone'] || profileData['Emergency Phone'] || '').trim(),
     String(profileData['Youth Home Phone'] || profileData['Emergency Phone 2'] || '').trim(),

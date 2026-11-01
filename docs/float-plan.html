@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Troop 58 Float Plan & Pre-Trip Planning</title>
+  <base target="_top">
+  <link rel="stylesheet" href="forms.css">
+  <link rel="stylesheet" href="hub.css">
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    @media print {
+      body { background: white; color: black; font-size: 12pt; }
+      .no-print { display: none !important; }
+      .container { max-width: 100% !important; padding: 0 !important; box-shadow: none !important; }
+      #gearChecklistContainer > div:has(input[name="gearItem"]:not(:checked)) { display: none !important; }
+      input.gear-qty:placeholder-shown { display: none !important; }
+    }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.85rem; }
+    .badge-success { background: #e8f5e9; color: #2e7d32; }
+    .badge-warning { background: #fff3e0; color: #ef6c00; }
+    .badge-danger { background: #ffebee; color: #c62828; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 20px; font-size: 0.9rem; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f5f9fc; color: #1a237e; }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <p class="no-print"><a href="index.html">&larr; Back to the Troop Hub</a></p>
+
+    <div class="signin no-print">
+      <p id="signinPrompt">Sign in as a leader to generate and manage float plans.</p>
+      <div id="googleSignInBtn"></div>
+      <div id="signedInStatus" class="signed-in-status" hidden>
+        <span>Signed in as <strong id="signedInUser"></strong></span>
+        <button type="button" id="signOutBtn" class="link-btn">Sign out</button>
+      </div>
+    </div>
+
+    <img src="images/Troop58Logo.jpg" alt="Troop 58 Logo" class="troop-logo">
+
+    <div class="form-header">
+      <h2>BSA Troop 58 Float Plan</h2>
+      <h2><span id="planTripTitle">Loading...</span></h2>
+      <h3><span id="planTripDate"></span></h3>
+      <h3><span id="planTripLocation"></span></h3>
+    </div>
+
+    <div style="text-align: right; margin-bottom: 15px;" hidden>
+      <button type="button" class="no-print" onclick="window.print()" style="background: #0055a5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; width: auto; display: inline-block; margin-top: 0;">Print / Export PDF</button>
+    </div>
+
+    <div id="app" hidden>
+      <div id="floatPlanContent">
+        <!-- Trip Summary Header -->
+        <div style="margin-bottom: 20px;">
+          <h3 id="planTripTitle" style="margin: 0 0 5px 0; color: #1a237e;"></h3>
+          <p style="margin: 0; color: #555;"><strong id="planTripDate"></strong> · <span id="planTripLocation"></span></p>
+        </div>
+
+        <!-- Pre-Meeting Logistics & Transport Check -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 15px;">
+          <div style="background: #f5f9fc; padding: 12px; border-radius: 6px; border: 1px solid #d0e1f9;">
+            <div style="font-size: 0.85rem; color: #555;">Total Attending</div>
+            <div id="totalHeadcount" style="font-size: 1.5rem; font-weight: bold; color: #1a237e;">0</div>
+            <div style="font-size: 0.8rem; color: #666;"><span id="youthCount">0</span> Youth · <span id="adultCount">0</span> Adults</div>
+          </div>
+          <div style="background: #f5f9fc; padding: 12px; border-radius: 6px; border: 1px solid #d0e1f9;">
+            <div style="font-size: 0.85rem; color: #555;">Driver Seatbelts Available</div>
+            <div id="totalSeats" style="font-size: 1.5rem; font-weight: bold; color: #1a237e;">0</div>
+            <div style="font-size: 0.8rem; color: #666;"><span id="driverCount">0</span> Drivers registered</div>
+          </div>
+          <div style="background: #f5f9fc; padding: 12px; border-radius: 6px; border: 1px solid #d0e1f9;">
+            <div style="font-size: 0.85rem; color: #555;">Transport Status</div>
+            <div id="transportBadgeContainer" style="margin-top: 6px;"><span class="badge badge-warning">Loading...</span></div>
+          </div>
+        </div>
+
+        <!-- Youth & Adult Rosters -->
+        <div id="yptAlertBox" style="margin-bottom: 15px;" hidden></div>
+
+        <h5>Youth Participants (<span id="youthTableCount">0</span>)</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>Scout Name</th>
+              <th>Gender</th>
+              <th>Age</th>
+              <th>Patrol</th>
+              <th>Rank / Position</th>
+              <th>Emergency Phone</th>
+              <th>Medical Notes</th>
+            </tr>
+          </thead>
+          <tbody id="youthTableBody">
+            <tr><td colspan="7" style="text-align: center; color: #777;">No permission slips submitted yet.</td></tr>
+          </tbody>
+        </table>
+
+        <h5>Attending Adults & Drivers (<span id="adultTableCount">0</span>)</h5>
+        <table>
+          <thead>
+            <tr>
+              <th>Adult Name</th>
+              <th>Role</th>
+              <th>Cell Phone</th>
+              <th>Driving</th>
+              <th>Vehicle (Make/Model/Seats)</th>
+              <th>YPT Date</th>
+            </tr>
+          </thead>
+          <tbody id="adultTableBody">
+            <tr><td colspan="6" style="text-align: center; color: #777;">No adults registered yet.</td></tr>
+          </tbody>
+        </table>
+
+        <!-- Route & Itinerary Form -->
+        <form id="floatPlanForm">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 15px;">
+            <div>
+              <label for="leaderInCharge"><strong>Leader in Charge / Tour Permit #</strong></label>
+              <input type="text" id="leaderInCharge" placeholder="e.g. ASM John Smith" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            <div>
+              <label for="departureTime"><strong>Departure Time & Location</strong></label>
+              <input type="text" id="departureTime" placeholder="e.g. Fri 5:00 PM @ Church Parking Lot" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 15px;">
+            <div>
+              <label for="returnTime"><strong>Estimated Return Time & Location</strong></label>
+              <input type="text" id="returnTime" placeholder="e.g. Sun 1:00 PM @ Church Parking Lot" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            <div>
+              <label for="emergencyFacility"><strong>Nearest Hospital / Ranger Station</strong></label>
+              <input type="text" id="emergencyFacility" placeholder="e.g. St. Peter's Hospital (Ph: 555-0199)" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+          </div>
+          <div style="margin-bottom: 15px;">
+            <label for="routeItinerary"><strong>Route / Itinerary / Checkpoints / Description</strong></label>
+            <textarea id="routeItinerary" rows="4" placeholder="Describe trail role, river checkpoints, campsite location, or activity plan..." style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
+          </div>
+
+          <!-- Troop Garage Gear Checklist -->
+          <p style="font-size: 0.85rem; color: #555;">Check off equipment needed from the garage for this outing:</p>
+          <div id="gearChecklistContainer" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; background: #f8fbfd; border: 1px solid #cce0f5; padding: 15px; border-radius: 6px; margin-bottom: 20px;">
+            <!-- Rendered dynamically by float-plan.js -->
+          </div>
+          <div class="no-print" style="display: flex; gap: 8px; margin-bottom: 10px;">
+            <input type="number" id="newGearQtyInput" placeholder="Qty" min="1" style="flex: 0 0 70px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            <input type="text" id="newGearInput" placeholder="Add custom gear item..." style="flex: 2; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            <button type="button" id="addGearBtn" style="background: #0055a5; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; width: auto; margin-top: 0;">Add Item</button>
+          </div>
+
+          <div class="no-print" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+            <button type="button" onclick="window.print()" style="background: #0055a5; color: white; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; cursor: pointer;">Print / Export PDF</button>
+            <button type="button" id="saveFloatPlanBtn" style="background: #1b5e20; color: white; border: none; padding: 10px 20px; border-radius: 4px; font-weight: bold; cursor: pointer;">Save Float Plan Notes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="float-plan.js"></script>
+</body>
+
+</html>

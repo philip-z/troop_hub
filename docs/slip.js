@@ -87,12 +87,121 @@ document.addEventListener('DOMContentLoaded', function() {
     form.addEventListener('input', saveFormDraft);
     form.addEventListener('change', saveFormDraft);
     form.addEventListener('submit', handleFormSubmit);
-    const scoutSelector = document.getElementById('scoutSelector');
-    if (scoutSelector) scoutSelector.addEventListener('change', e => onScoutSelected(e.target.value));
+    const scoutNameInput = document.getElementById('scoutName');
+    if (scoutNameInput) {
+      scoutNameInput.addEventListener('change', e => {
+        const name = e.target.value.trim().toLowerCase();
+        const found = (window.userYouthProfiles || []).find(s => String(s['Youth Name'] || s['Name'] || '').trim().toLowerCase() === name);
+        if (found) fillScoutProfile(found);
+      });
+    }
   }
 
   const signOutBtn = document.getElementById('signOutBtn');
   if (signOutBtn) signOutBtn.addEventListener('click', TroopAuth.signOut);
+
+  const manageProfilesBtn = document.getElementById('manageProfilesBtn');
+  const profilesDialog = document.getElementById('profilesDialog');
+  const closeProfilesModal = document.getElementById('closeProfilesModal');
+  const profilesModalForm = document.getElementById('profilesModalForm');
+  const modalScoutSelect = document.getElementById('modalScoutSelect');
+
+  const modalProfileSelect = document.getElementById('modalProfileSelect');
+  const youthExtraFields = document.getElementById('youthExtraFields');
+  const adultExtraFields = document.getElementById('adultExtraFields');
+
+  if (manageProfilesBtn && profilesDialog) {
+    manageProfilesBtn.addEventListener('click', () => {
+      populateModalProfileDropdown();
+      profilesDialog.showModal();
+    });
+  }
+  if (closeProfilesModal && profilesDialog) {
+    closeProfilesModal.addEventListener('click', () => profilesDialog.close());
+  }
+
+  if (modalProfileSelect) {
+    modalProfileSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      const isAdultKind = val === 'add_adult' || (val !== '' && val !== 'add_scout' && window.userProfilesMap && window.userProfilesMap[val] && window.userProfilesMap[val].kind === 'adult');
+      
+      if (youthExtraFields) youthExtraFields.hidden = isAdultKind;
+      if (adultExtraFields) adultExtraFields.hidden = !isAdultKind;
+      document.getElementById('modalProfileKind').value = isAdultKind ? 'adult' : 'youth';
+
+      if (val === '' || val === 'add_scout' || val === 'add_adult') {
+        document.getElementById('modalScoutName').value = '';
+        document.getElementById('modalGender').value = '';
+        document.getElementById('modalBirthMonth').value = '';
+        document.getElementById('modalHomePatrol').value = '';
+        document.getElementById('modalAuthorizedEmails').value = '';
+        document.getElementById('modalEmergencyPhone').value = '';
+        document.getElementById('modalMedicalNotes').value = '';
+        if (adultExtraFields) {
+          document.getElementById('modalVehicleMake').value = '';
+          document.getElementById('modalAvailableSeats').value = '';
+          document.getElementById('modalYptDate').value = '';
+        }
+      } else if (window.userProfilesMap && window.userProfilesMap[val]) {
+        const p = window.userProfilesMap[val];
+        document.getElementById('modalScoutName').value = p['Name'] || p['Youth Name'] || p['Adult Name'] || '';
+        document.getElementById('modalGender').value = p['Gender'] || '';
+        document.getElementById('modalBirthMonth').value = p['Birth Month'] || '';
+        document.getElementById('modalHomePatrol').value = p['Home Patrol'] || '';
+        document.getElementById('modalAuthorizedEmails').value = p['Authorized Emails'] || '';
+        document.getElementById('modalEmergencyPhone').value = p['Emergency Phone'] || p['Youth Emergency Phone'] || p['Adult Emergency Phone'] || '';
+        document.getElementById('modalMedicalNotes').value = p['Medical Notes'] || '';
+        if (adultExtraFields && isAdultKind) {
+          document.getElementById('modalVehicleMake').value = p['Vehicle Make'] || '';
+          document.getElementById('modalAvailableSeats').value = p['Available Seats'] || '';
+          document.getElementById('modalYptDate').value = p['Ypt Date'] || '';
+        }
+      }
+    });
+  }
+
+  if (profilesModalForm) {
+    profilesModalForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const kind = document.getElementById('modalProfileKind').value;
+      const name = document.getElementById('modalScoutName').value.trim();
+      if (!name) return;
+
+      const profileData = {
+        'Profile Kind': kind,
+        'Name': name,
+        'Gender': document.getElementById('modalGender').value.trim(),
+        'Authorized Emails': document.getElementById('modalAuthorizedEmails').value.trim(),
+        'Emergency Phone': document.getElementById('modalEmergencyPhone').value.trim(),
+        'Medical Notes': document.getElementById('modalMedicalNotes').value.trim()
+      };
+      if (kind === 'youth') {
+        profileData['Youth Name'] = name;
+        profileData['Birth Month'] = document.getElementById('modalBirthMonth').value.trim();
+        profileData['Home Patrol'] = document.getElementById('modalHomePatrol').value.trim();
+        profileData['Youth Emergency Phone'] = profileData['Emergency Phone'];
+      } else {
+        profileData['Adult Name'] = name;
+        profileData['Vehicle Make'] = document.getElementById('modalVehicleMake').value.trim();
+        profileData['Available Seats'] = document.getElementById('modalAvailableSeats').value.trim();
+        profileData['Ypt Date'] = document.getElementById('modalYptDate').value.trim();
+        profileData['Adult Emergency Phone'] = profileData['Emergency Phone'];
+      }
+
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, profileData })
+      })
+        .then(res => res.json())
+        .then(r => {
+          if (r.status === 'success') {
+            profilesDialog.close();
+            loadUserProfile(window.currentUserGoogleId || 'user');
+          }
+        })
+        .catch(err => console.error('Error saving profile:', err));
+    });
+  }
 
   toggleFormType();
   updatePrintHeader();
@@ -483,6 +592,15 @@ function handleCredentialResponse(response) {
   if (pName && responsePayload.name) pName.value = responsePayload.name;
   if (pEmail && responsePayload.email) pEmail.value = responsePayload.email;
 
+  const parentEmails = document.getElementById('parentEmails');
+  if (parentEmails && !parentEmails.value.trim() && responsePayload.email) {
+    parentEmails.value = responsePayload.email;
+  }
+  const adultEmails = document.getElementById('adultEmails');
+  if (adultEmails && !adultEmails.value.trim() && responsePayload.email) {
+    adultEmails.value = responsePayload.email;
+  }
+
   loadUserProfile(responsePayload.sub);
 
   document.querySelectorAll('#permissionForm input[name*="signature" i]').forEach(el => {
@@ -509,34 +627,57 @@ function clearSignedInState() {
 
 function loadUserProfile(googleUserId) {
   if (!googleUserId) return;
+  const cacheKey = `troop58_scouts_${googleUserId}`;
+  let scouts = [];
+  try { scouts = JSON.parse(localStorage.getItem(cacheKey)) || []; } catch (e) {}
+  window.userYouthProfiles = scouts;
+  updateScoutDatalist(scouts);
 
-  const localCache = localStorage.getItem(`user_profile_${googleUserId}`);
-  if (localCache && localCache !== '{}') {
-    let cached = null;
-    try { cached = JSON.parse(localCache); } catch (e) {}
-    if (cached) {
-      populateFormFields(document.getElementById('permissionForm'), cached, { skipSignatures: true });
-    }
-  }
-
-  // Always refresh from the server: the local cache is built from submitted form data, which
-  // omits the disabled (hidden) form section, so it can lack adult or scout fields.
-  // POST (not GET) so the token never appears in a URL or server log.
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({ action: 'getProfile', idToken: window.currentIdToken })
   })
     .then(res => res.json())
     .then(profileData => {
-      if (profileData && !profileData.error && Object.keys(profileData).length > 0) {
-        populateFormFields(document.getElementById('permissionForm'), profileData, { skipSignatures: true });
-        let merged = {};
-        try { merged = JSON.parse(localStorage.getItem(`user_profile_${googleUserId}`)) || {}; } catch (e) {}
-        localStorage.setItem(`user_profile_${googleUserId}`, JSON.stringify(Object.assign(merged, profileData)));
-        saveFormDraft();
+      if (profileData && !profileData.error) {
+        if (Array.isArray(profileData.youthProfiles) && profileData.youthProfiles.length > 0) {
+          window.userYouthProfiles = profileData.youthProfiles;
+          localStorage.setItem(cacheKey, JSON.stringify(profileData.youthProfiles));
+          updateScoutDatalist(profileData.youthProfiles);
+          // Auto-fill first scout if name is empty
+          const scoutNameInput = document.getElementById('scoutName');
+          if (scoutNameInput && !scoutNameInput.value.trim()) {
+            fillScoutProfile(profileData.youthProfiles[0]);
+          }
+        }
       }
     })
-    .catch(err => console.log('Offline or profile fetch error:', err));
+    .catch(err => console.log('Profile fetch error:', err));
+}
+
+function updateScoutDatalist(scouts) {
+  const list = document.getElementById('scoutNamesList');
+  if (!list) return;
+  list.innerHTML = '';
+  scouts.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s['Youth Name'] || s['Name'] || '';
+    list.appendChild(opt);
+  });
+}
+
+function fillScoutProfile(scout) {
+  if (!scout) return;
+  document.getElementById('scoutName').value = scout['Youth Name'] || scout['Name'] || '';
+  if (document.getElementById('scoutGender')) document.getElementById('scoutGender').value = scout['Gender'] || '';
+  if (document.getElementById('birthYear')) document.getElementById('birthYear').value = scout['Birth Year'] || '';
+  if (document.getElementById('birthMonth')) document.getElementById('birthMonth').value = scout['Birth Month'] || '';
+  if (document.getElementById('scoutPatrol')) document.getElementById('scoutPatrol').value = scout['Patrol'] || scout['Home Patrol'] || '';
+  if (document.getElementById('scoutRank')) document.getElementById('scoutRank').value = scout['Rank'] || '';
+  if (document.getElementById('scoutPosition')) document.getElementById('scoutPosition').value = scout['Position'] || '';
+  if (document.getElementById('parentEmails')) document.getElementById('parentEmails').value = scout['Authorized Emails'] || '';
+  if (document.getElementById('emergencyContact')) document.getElementById('emergencyContact').value = scout['Youth Emergency Phone'] || scout['Emergency Phone'] || '';
+  if (document.getElementById('medicalNotes')) document.getElementById('medicalNotes').value = scout['Medical Notes'] || '';
 }
 
 function saveUserProfile() {
@@ -547,20 +688,66 @@ function saveUserProfile() {
   delete profileData['Form Type'];
   delete profileData['website_url'];
 
-  const cacheKey = `user_profile_${googleUserId}`;
-  let cached = {};
-  try { cached = JSON.parse(localStorage.getItem(cacheKey)) || {}; } catch (e) {}
-  const youthFields = {};
-  Object.keys(profileData).forEach(k => { if (k.startsWith('Youth ')) youthFields[k] = profileData[k]; });
-  const youthName = String(youthFields['Youth Name'] || '').trim();
-  if (youthName) {
-    const list = Array.isArray(cached.youthProfiles) ? cached.youthProfiles : [];
-    const i = list.findIndex(y => String(y['Youth Name'] || '').trim().toLowerCase() === youthName.toLowerCase());
-    if (i >= 0) list[i] = Object.assign(list[i], youthFields); else list.push(youthFields);
-    cached.youthProfiles = list;
-    renderYouthSelector(list);
+  const cacheKey = `troop58_scouts_${googleUserId}`;
+  let scouts = [];
+  try { scouts = JSON.parse(localStorage.getItem(cacheKey)) || []; } catch (e) {}
+
+  const scoutName = String(profileData['Youth Name'] || '').trim();
+  if (!scoutName) return;
+
+  const existingIdx = scouts.findIndex(s => String(s['Youth Name'] || s['Name'] || '').trim().toLowerCase() === scoutName.toLowerCase());
+  if (existingIdx >= 0) {
+    scouts[existingIdx] = Object.assign(scouts[existingIdx], profileData);
+  } else {
+    scouts.push(profileData);
   }
-  localStorage.setItem(cacheKey, JSON.stringify(Object.assign(cached, profileData)));
+  localStorage.setItem(cacheKey, JSON.stringify(scouts));
+  updateScoutDatalist(scouts);
+
+  // Send to server
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, profileData: { 'Youth Name': scoutName, youthProfiles: scouts } })
+  }).catch(err => console.error('Save profile error:', err));
+}
+
+function populateModalProfileDropdown() {
+  const sel = document.getElementById('modalProfileSelect');
+  if (!sel) return;
+  sel.length = 3; // Keep default, add_scout, add_adult
+  window.userProfilesMap = {};
+
+  (window.userYouthProfiles || []).forEach((y, idx) => {
+    const key = 'youth_' + idx;
+    window.userProfilesMap[key] = Object.assign({ kind: 'youth' }, y);
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = (y['Youth Name'] || 'Scout') + ' (Scout)';
+    sel.insertBefore(opt, sel.querySelector('option[value="add_scout"]'));
+  });
+
+  // If adult profile exists in local cache or profiles
+  if (window.userAdultProfile) {
+    const key = 'adult_0';
+    window.userProfilesMap[key] = Object.assign({ kind: 'adult' }, window.userAdultProfile);
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = (window.userAdultProfile['Adult Name'] || window.userAdultProfile['Name'] || 'Adult') + ' (Adult)';
+    sel.insertBefore(opt, sel.querySelector('option[value="add_scout"]'));
+  }
+
+  sel.value = '';
+  document.getElementById('modalProfileKind').value = 'youth';
+  if (document.getElementById('youthExtraFields')) document.getElementById('youthExtraFields').hidden = false;
+  if (document.getElementById('adultExtraFields')) document.getElementById('adultExtraFields').hidden = true;
+
+  document.getElementById('modalScoutName').value = '';
+  document.getElementById('modalGender').value = '';
+  document.getElementById('modalBirthMonth').value = '';
+  document.getElementById('modalHomePatrol').value = '';
+  document.getElementById('modalAuthorizedEmails').value = '';
+  document.getElementById('modalEmergencyPhone').value = '';
+  document.getElementById('modalMedicalNotes').value = '';
 }
 
 function renderYouthSelector(youthProfiles) {
@@ -580,6 +767,11 @@ function renderYouthSelector(youthProfiles) {
     opt.textContent = y['Youth Name'] || '';
     selector.insertBefore(opt, addNew);
   });
+
+  if (window.userYouthProfiles.length > 0 && (selector.value === '' || selector.value === 'new')) {
+    selector.value = '0';
+    onScoutSelected(0);
+  }
 }
 
 function onScoutSelected(selectedIndex) {
