@@ -65,18 +65,12 @@
 
       <fieldset id="youthSection" class="form-section">
         <legend class="sr-only">Youth permission slip</legend>
-        <div id="scoutSelectorContainer" class="scout-selector" hidden>
-          <label for="scoutSelector"><strong>Select Scout to Pre-fill:</strong></label>
-          <select id="scoutSelector">
-            <option value="">-- Choose a Scout --</option>
-            <option value="new">+ Add Another Scout</option>
-          </select>
-        </div>
         <div class="agreement">
           <strong>The Scout Permission Slip:</strong><br>
           <p>
             Having full confidence that every precaution will be taken to ensure the safety of my child
-            <input type="text" id="scoutName" name="Youth Name" required placeholder="Scout Name" aria-label="Scout name" autocomplete="off">
+            <input type="text" id="scoutName" name="Youth Name" required placeholder="Scout Name" aria-label="Scout name" autocomplete="off" list="scoutNamesList">
+            <datalist id="scoutNamesList"></datalist>
             , I hereby give permission for them to participate in the Troop 58 activity described above.
           </p>
 
@@ -92,8 +86,6 @@
 
           <input type="text" id="youthParentSignature" name="Parent Signature" required placeholder="Parent/Guardian Signature" aria-label="Parent or guardian signature" autocomplete="off">
           <input type="date" id="youthParentSignDate" name="Parent Signature Date" required aria-label="Parent signature date">
-          <input type="tel" id="emergencyContact" name="Youth Emergency Phone" required placeholder="Emergency Phone" aria-label="Emergency phone" inputmode="tel" autocomplete="tel">
-          <input type="tel" id="emergencyContact2" name="Youth Home Phone" placeholder="Home/Other Phone" aria-label="Home or other phone" inputmode="tel" autocomplete="tel">
 
           <p>
             *I have read and understand this form, and I agree to comply with Troop 58’s electronic device policies to
@@ -112,19 +104,81 @@
           <input type="text" id="scoutSignature" name="Youth Signature" required placeholder="Scout Signature" aria-label="Scout signature" autocomplete="off">
           <input type="date" id="scoutSignDate" name="Youth Signature Date" required aria-label="Scout signature date">
 
-          <div>
-            <p>
-              <label for="youthMedication" class="inline">SCOUT Medication needed (to be held by an adult leader)</label>
-              <input type="text" id="youthMedication" name="Youth Medication" class="input-long">
-            </p>
-            <p>
-              <label for="youthAllergies" class="inline">Medical Conditions and/or Allergies:</label>
-              <input type="text" id="youthAllergies" name="Youth Allergies" class="input-long">
-            </p>
-            <p>
-              <label for="youthOther" class="inline">Other needs:</label>
-              <input type="text" id="youthOther" name="Youth Other Needs" class="input-long">
-            </p>
+          <div class="scout-details" style="background: #f8fbfd; border: 1px solid #cce0f5; padding: 16px; border-radius: 8px; margin: 15px 0;">
+            <h4 style="margin-top: 0; margin-bottom: 12px; color: #1a237e; font-size: 1rem;">Scout Details & Contact Info</h4>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label for="scoutGender" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Gender</label>
+                <select id="scoutGender" name="Gender" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <option value="">-- Select --</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label for="birthYear" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Birth Year</label>
+                <input type="number" id="birthYear" name="Birth Year" placeholder="YYYY" min="2005" max="2018" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label for="birthMonth" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Birth Month</label>
+                <select id="birthMonth" name="Birth Month" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <option value="">-- Month --</option>
+                  <option value="01">January</option>
+                  <option value="02">February</option>
+                  <option value="03">March</option>
+                  <option value="04">April</option>
+                  <option value="05">May</option>
+                  <option value="06">June</option>
+                  <option value="07">July</option>
+                  <option value="08">August</option>
+                  <option value="09">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label for="scoutPatrol" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Patrol</label>
+                <input type="text" id="scoutPatrol" name="Patrol" placeholder="e.g. Eagles" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label for="scoutRank" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Rank</label>
+                <input type="text" id="scoutRank" name="Rank" placeholder="e.g. First Class" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label for="scoutPosition" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Position</label>
+                <input type="text" id="scoutPosition" name="Position" placeholder="e.g. Patrol Leader" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label for="emergencyContact" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Emergency Phone *</label>
+                <input type="tel" id="emergencyContact" name="Youth Emergency Phone" required placeholder="Primary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label for="emergencyContact2" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Home / Other Phone</label>
+                <input type="tel" id="emergencyContact2" name="Youth Home Phone" placeholder="Secondary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+              <label for="parentEmails" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Parent Emails (for family records)</label>
+              <input type="text" id="parentEmails" name="Authorized Emails" placeholder="parent1@gmail.com, parent2@gmail.com" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <div>
+              <label for="medicalNotes" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Medical Notes, Allergies & Special Needs</label>
+              <textarea id="medicalNotes" name="Medical Notes" rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
+              <small style="display: block; color: #555; margin-top: 4px; font-size: 0.85rem;">
+                Please write 'None' or 'N/A' if reviewed and nothing is applicable.
+              </small>
+            </div>
           </div>
         </div>
       </fieldset>
@@ -136,50 +190,6 @@
           <input type="text" id="adultName" name="Adult Name" required placeholder="Insert Name" aria-label="Adult name" autocomplete="name">
           <strong>am over 18 years of age</strong>
           and will participate in the Troop 58 activity described above.
-
-          <p class="radio-line">
-            I can drive if needed,
-            <label class="inline"><input type="radio" name="drive" value="To"> To</label>
-            <label class="inline"><input type="radio" name="drive" value="From"> From;</label>
-            <label class="inline"><input type="radio" name="drive" value="Both"> both ways.</label>
-            <label class="inline"><input type="radio" name="drive" value="Prefer not to drive"> I would prefer not to drive.</label>
-            <label class="inline"><input type="radio" name="drive" value="Cannot drive"> I cannot drive.</label>
-          </p>
-
-          <div class="training">
-            <strong>Adults Training:</strong><br>
-            <label class="inline">Youth Protection Training
-              <input type="date" id="yptDate" name="Ypt Date"></label><br>
-            <label class="inline">Hazardous Weather Training
-              <input type="date" id="hwDate" name="Hw Date"></label><br>
-            <label class="inline">BSA Lifeguard
-              <input type="date" id="blgDate" name="Blg Date"></label>
-            <label class="inline">Safe Swim Defense
-              <input type="date" id="ssdDate" name="Ssd Date"></label><br>
-            <label class="inline">First Aid
-              <input type="date" id="faDate" name="Fa Date"></label>
-            <label class="inline">Safety Afloat
-              <input type="date" id="saDate" name="Sa Date"></label><br>
-            <label class="inline">CPR certification
-              <input type="date" id="cprDate" name="Cpr Date"></label><br>
-          </div>
-
-          <div class="vehicle">
-            Drivers Insurance and Car Info:
-            <label class="inline">Valid Drivers License Yes
-            <input type="text" name="Veh License" placeholder="initial"></label><br>
-            <label class="inline">Vehicle Plate<input type="text" name="Veh Plate #" placeholder="Plate #"><input type="text" name="Veh State" placeholder="State"></label><br>
-            <label class="inline">Year <input type="number" name="Veh Year" inputmode="numeric"></label>
-            <label class="inline">Make <input type="text" name="Veh Make" id="vehMake" list="vehMakeList" autocomplete="off"></label>
-            <label class="inline">Model <input type="text" name="Veh Model" id="vehModel" list="vehModelList" autocomplete="off"></label><br>
-            <label class="inline"># of Seat belts <input type="number" name="Veh Seats" inputmode="numeric"></label><br>
-            <label class="inline">Comfortable Passenger Limit <input type="number" name="Veh Passengers" inputmode="numeric"></label>
-            <span class="footnote">(Includes driver)</span><br>
-            <datalist id="vehMakeList"></datalist>
-            <datalist id="vehModelList"></datalist>
-            <label class="inline">Current Insurance Yes
-              <input type="text" name="Veh Insurance" placeholder="initial"></label>
-          </div>
 
           <p>
             All participants are expected to abide by and follow safe scouting instruction/guidelines at all times.
@@ -196,22 +206,140 @@
 
           <input type="text" id="adultSignature" name="Adult Signature" required placeholder="Adult signature" aria-label="Adult signature" autocomplete="off">
           <input type="date" id="adultSignDate" name="Adult Signature Date" required aria-label="Adult signature date">
-          <input type="tel" id="cellPhone" name="Adult Cell Phone" placeholder="Adult Cell Phone" aria-label="Adult cell phone" inputmode="tel" autocomplete="tel">
-          <input type="tel" id="emergencyPhone" name="Adult Emergency Phone" required placeholder="Emergency Phone" aria-label="Emergency phone" inputmode="tel">
 
-          <div>
-            <p>
-              <label for="adultMedication" class="inline">ADULT Medication needed</label>
-              <input type="text" id="adultMedication" name="Adult Medication" class="input-long">
-            </p>
-            <p>
-              <label for="adultAllergies" class="inline">Medical Conditions and/or Allergies:</label>
-              <input type="text" id="adultAllergies" name="Adult Allergies" class="input-long">
-            </p>
-            <p>
-              <label for="adultOther" class="inline">Other needs:</label>
-              <input type="text" id="adultOther" name="Adult Other Needs" class="input-long">
-            </p>
+          <div class="adult-details" style="background: #f8fbfd; border: 1px solid #cce0f5; padding: 16px; border-radius: 8px; margin: 15px 0;">
+            <h4 style="margin-top: 0; margin-bottom: 12px; color: #1a237e; font-size: 1rem;">Adult Details, Training & Driving Info</h4>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label for="adultGender" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Gender</label>
+                <select id="adultGender" name="Gender" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <option value="">-- Select --</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label for="adultPosition" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Position / Role</label>
+                <input type="text" id="adultPosition" name="Position" placeholder="e.g. Assistant Scoutmaster / Driver" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+              <label for="adultEmails" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Adult Email</label>
+              <input type="email" id="adultEmails" name="Adult Email" placeholder="you@example.com" autocomplete="email" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+              <div>
+                <label for="cellPhone" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Adult Cell Phone</label>
+                <input type="tel" id="cellPhone" name="Adult Cell Phone" placeholder="Cell Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label for="emergencyPhone" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Emergency Phone *</label>
+                <input type="tel" id="emergencyPhone" name="Adult Emergency Phone" required placeholder="Emergency Phone" inputmode="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+            </div>
+
+            <div style="margin-bottom: 14px;">
+              <p style="font-weight: bold; margin-bottom: 8px; font-size: 0.9rem; color: #1a237e;">Driving Availability:</p>
+              <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <label style="font-weight: normal;"><input type="radio" name="drive" value="To"> To</label>
+                <label style="font-weight: normal;"><input type="radio" name="drive" value="From"> From</label>
+                <label style="font-weight: normal;"><input type="radio" name="drive" value="Both"> Both ways</label>
+                <label style="font-weight: normal;"><input type="radio" name="drive" value="Prefer not to drive"> Prefer not to drive</label>
+                <label style="font-weight: normal;"><input type="radio" name="drive" value="Cannot drive"> Cannot drive</label>
+              </div>
+            </div>
+
+            <div class="training" style="margin-bottom: 14px; border-top: 1px solid #cce0f5; padding-top: 12px;">
+              <strong style="display: block; margin-bottom: 8px; font-size: 0.9rem; color: #1a237e;">Adult Training Completion Dates:</strong>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Youth Protection Training (YPT)</label>
+                  <input type="date" id="yptDate" name="Ypt Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Hazardous Weather Training</label>
+                  <input type="date" id="hwDate" name="Hw Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">BSA Lifeguard</label>
+                  <input type="date" id="blgDate" name="Blg Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Safe Swim Defense</label>
+                  <input type="date" id="ssdDate" name="Ssd Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">First Aid</label>
+                  <input type="date" id="faDate" name="Fa Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Safety Afloat</label>
+                  <input type="date" id="saDate" name="Sa Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">CPR Certification</label>
+                  <input type="date" id="cprDate" name="Cpr Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+              </div>
+            </div>
+
+            <div class="vehicle" style="border-top: 1px solid #cce0f5; padding-top: 12px; margin-bottom: 12px;">
+              <strong style="display: block; margin-bottom: 8px; font-size: 0.9rem; color: #1a237e;">Vehicle & Insurance Information:</strong>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px;">
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Valid License (initial)</label>
+                  <input type="text" name="Veh License" placeholder="Initials" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Vehicle Plate #</label>
+                  <input type="text" name="Veh Plate #" placeholder="Plate #" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">State</label>
+                  <input type="text" name="Veh State" placeholder="State" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Year</label>
+                  <input type="number" name="Veh Year" placeholder="YYYY" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px;">
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Make</label>
+                  <input type="text" name="Veh Make" id="vehMake" list="vehMakeList" placeholder="e.g. Ford" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Model</label>
+                  <input type="text" name="Veh Model" id="vehModel" list="vehModelList" placeholder="e.g. Explorer" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;"># of Seatbelts</label>
+                  <input type="number" name="Veh Seats" placeholder="Total" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Passenger Limit (incl. driver)</label>
+                  <input type="number" name="Veh Passengers" placeholder="Limit" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                </div>
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Current Insurance (initial)</label>
+                <input type="text" name="Veh Insurance" placeholder="Initials" style="width: 120px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              </div>
+              <datalist id="vehMakeList"></datalist>
+              <datalist id="vehModelList"></datalist>
+            </div>
+
+            <div style="border-top: 1px solid #cce0f5; padding-top: 12px;">
+              <label for="adultMedicalNotes" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Medical Notes, Allergies & Special Needs</label>
+              <textarea id="adultMedicalNotes" name="Medical Notes" rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
+              <small style="display: block; color: #555; margin-top: 4px; font-size: 0.85rem;">
+                Please write 'None' or 'N/A' if reviewed and nothing is applicable.
+              </small>
+            </div>
           </div>
         </div>
       </fieldset>

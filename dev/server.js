@@ -51,6 +51,9 @@ const db = {
 const truthy = (v) => ["true", "yes", "y", "1", "x"].includes(String(v ?? "").trim().toLowerCase());
 const revision = (t) => crypto.createHash("sha256").update(JSON.stringify(t)).digest("base64url");
 const tripConfig = (id) => { const t = db.trips.find((x) => x.tripId === String(id || "").trim()); return t ? Object.assign({}, t, { _tripRevision: revision(t) }) : null; };
+const tripSummary = (t) => ({ id: t.tripId, name: t.tripTitle, date: t.tripDates, location: t.tripLocation, cost: t.tripCost,
+  acceptingResponses: truthy(t.acceptingResponses), acceptingReceipts: truthy(t.acceptingReceipts),
+  ...(truthy(t.acceptingResponses) ? { slip: tripConfig(t.tripId) } : {}) });
 const cell = (v) => { const s = v == null ? "" : String(v).slice(0, 1000); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };
 const err = (code, message) => ({ status: "error", code, message });
 
@@ -115,11 +118,16 @@ function hub(data) {
   switch (data.action) {
     case "hubSession":
       a = auth(data, ""); if (a.error) return a.error;
-      return { status: "success", email: a.info.email, permissions: a.info.permissions };
+      return {
+        status: "success",
+        email: a.info.email,
+        permissions: a.info.permissions,
+        trips: db.trips.map((t) => tripSummary(t)),
+        ...(a.info.permissions.addTrips ? { templates: tripTemplates() } : {})
+      };
     case "hubListTrips":
       a = auth(data, ""); if (a.error) return a.error;
-      return { status: "success", trips: db.trips.map((t) => ({ id: t.tripId, name: t.tripTitle, date: t.tripDates, location: t.tripLocation,
-        cost: t.tripCost, acceptingResponses: truthy(t.acceptingResponses), acceptingReceipts: truthy(t.acceptingReceipts) })) };
+      return { status: "success", trips: db.trips.map((t) => tripSummary(t)) };
     case "hubListEquipment":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", items: db.equipment };
@@ -158,13 +166,17 @@ function nextTripId(month) {
 
 function listTripTemplates(data) {
   const a = auth(data, "addTrips"); if (a.error) return a.error;
+  return { status: "success", trips: tripTemplates() };
+}
+
+function tripTemplates() {
   const unesc = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
   const trips = db.trips.map((t) => ({
     id: t.tripId, tripTitle: t.tripTitle, tripDates: t.tripDates, tripLocation: t.tripLocation, departureDetails: t.departureDetails,
     departureOptions: [...String(t.customDepartureHtml || "").matchAll(/<option value="([^"]+)">/g)].map((m) => unesc(m[1])).join("\n"),
     returnDetails: t.returnDetails, tripCost: t.tripCost, tripCoordinator: t.tripCoordinator, tripUniform: t.tripUniform
   })).sort((x, y) => (x.id < y.id ? 1 : x.id > y.id ? -1 : 0));
-  return { status: "success", trips };
+  return trips;
 }
 
 function addTrip(data) {
@@ -274,7 +286,8 @@ http.createServer((req, res) => {
   if (url.pathname === "/api") {
     let body = "";
     req.on("data", (c) => { body += c; });
-    req.on("end", () => {
+    req.on("end", async () => {
+      await new Promise((r) => setTimeout(r, 2000));
       let out;
       try { out = api(req.method, url.searchParams, body); } catch (e) { out = err("error", String(e)); }
       res.writeHead(200, { "Content-Type": "application/json" });

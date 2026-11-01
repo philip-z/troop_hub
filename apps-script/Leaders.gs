@@ -128,12 +128,17 @@ function listTripTemplates_(data) {
   if (!info.emailVerified || !hasLeaderPermission_(info.email, 'addTrips')) {
     return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to add trips.' };
   }
+  return { status: 'success', trips: tripTemplates_() };
+}
+
+// No permission check here: callers must have verified addTrips already.
+function tripTemplates_() {
   var sheet = getSpreadsheet_('trips').getSheetByName('Trips');
-  if (!sheet || sheet.getLastRow() < 2) return { status: 'success', trips: [] };
+  if (!sheet || sheet.getLastRow() < 2) return [];
   var values = sheet.getDataRange().getDisplayValues();
   var headers = values[0].map(function(h) { return h.toString().trim(); });
   var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
-  var trips = values.slice(1)
+  return values.slice(1)
     .filter(function(r) { return String(col(r, 'tripId')).trim() !== ''; })
     .map(function(r) {
       return {
@@ -145,7 +150,6 @@ function listTripTemplates_(data) {
       };
     })
     .sort(function(a, b) { return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; });
-  return { status: 'success', trips: trips };
 }
 
 function addTrip_(data) {
