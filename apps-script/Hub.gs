@@ -80,7 +80,10 @@ function handleHub_(data) {
     case 'hubSession':
       auth = hubAuth_(data, '');
       if (auth.error) return auth.error;
-      return { status: 'success', email: auth.info.email, permissions: auth.info.permissions };
+      var session = { status: 'success', email: auth.info.email, permissions: auth.info.permissions, trips: hubListTrips_() };
+      // Leaders also get the add-trip page's "copy from" list, so that page needs no call of its own.
+      if (auth.info.permissions.addTrips) session.templates = tripTemplates_();
+      return session;
 
     case 'hubListTrips':
       auth = hubAuth_(data, '');
@@ -107,25 +110,33 @@ function handleHub_(data) {
   return hubError_('invalid', 'Unknown action.');
 }
 
+// One entry per trip for the hub's list. Trips that accept permission slips also carry
+// `slip`: the same config slipTrip returns, so the slip page can open without another call.
 function hubListTrips_() {
   var sheet = getSpreadsheet_('trips').getSheetByName('Trips');
   if (!sheet || sheet.getLastRow() < 2) return [];
+  var raw = sheet.getDataRange().getValues();
   var values = sheet.getDataRange().getDisplayValues();
   var headers = values[0].map(function(h) { return h.toString().trim(); });
   var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
-  return values.slice(1)
-    .filter(function(r) { return String(col(r, 'tripId')).trim() !== ''; })
-    .map(function(r) {
-      return {
-        id: col(r, 'tripId'),
-        name: col(r, 'tripTitle'),
-        date: col(r, 'tripDates'),
-        location: col(r, 'tripLocation'),
-        cost: col(r, 'tripCost'),
-        acceptingResponses: isTruthy_(col(r, 'acceptingResponses')),
-        acceptingReceipts: isTruthy_(col(r, 'acceptingReceipts'))
-      };
-    });
+  var trips = [];
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    if (String(col(r, 'tripId')).trim() === '') continue;
+    var accepting = isTruthy_(col(r, 'acceptingResponses'));
+    var trip = {
+      id: col(r, 'tripId'),
+      name: col(r, 'tripTitle'),
+      date: col(r, 'tripDates'),
+      location: col(r, 'tripLocation'),
+      cost: col(r, 'tripCost'),
+      acceptingResponses: accepting,
+      acceptingReceipts: isTruthy_(col(r, 'acceptingReceipts'))
+    };
+    if (accepting) trip.slip = tripRowConfig_(headers, raw[i]);
+    trips.push(trip);
+  }
+  return trips;
 }
 
 // Blocks spreadsheet formula injection and caps length.

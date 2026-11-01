@@ -223,220 +223,95 @@ function wordingHash_(raw) {
     .map(function(b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
 
-// Fetch saved profile by (verified) Google User ID
-function getUserProfile(googleUserId) {
+// Fetch saved profiles by verified user email (checking Authorized Emails)
+function getUserProfile(userEmail) {
   try {
     var ss = getSpreadsheet_('trips');
     var sheet = ss.getSheetByName('Profiles');
-    if (!sheet) return null;
-
-    var data = sheet.getDataRange().getValues();
-    if (data.length < 2) return null; // No users saved yet
-
-    var headers = data[0].map(function(h) { return h.toString().trim(); });
-    var id = String(googleUserId);
-
-    // Compare as strings: Sheets may hand back the ID as a number.
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === id) {
-
-        var profile = {};
-        for (var j = 1; j < headers.length; j++) {
-          var key = headers[j];
-          if (key === "") continue;
-          var v = data[i][j];
-          // Dates must be yyyy-MM-dd for <input type="date"> to accept them
-          if (v instanceof Date) {
-            v = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-          }
-          profile[key] = v;
-        }
-        profile.youthProfiles = getYouthProfiles_(id);
-        return profile;
+    if (!sheet || sheet.getLastRow() < 2) return null;
+    var values = sheet.getDataRange().getDisplayValues();
+    var headers = values[0].map(function(h) { return h.toString().trim(); });
+    var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
+    var emailLower = String(userEmail || '').trim().toLowerCase();
+    var youth = [];
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      var authEmails = String(col(r, 'Authorized Emails') || '').toLowerCase().split(',').map(function(e) { return e.trim(); });
+      if (authEmails.indexOf(emailLower) !== -1 || authEmails.indexOf('*') !== -1) {
+        youth.push({
+          'Youth Name': col(r, 'Scout Name'),
+          'Birth Month': col(r, 'Birth Month'),
+          'Home Patrol': col(r, 'Home Patrol'),
+          'Authorized Emails': col(r, 'Authorized Emails'),
+          'Youth Emergency Phone': col(r, 'Emergency Phone'),
+          'Youth Home Phone': col(r, 'Emergency Phone 2'),
+          'Medical Notes': col(r, 'Medical Notes')
+        });
       }
     }
-    var youth = getYouthProfiles_(id);
-    return youth.length ? { youthProfiles: youth } : null; // Profile not found
+    return youth.length ? { youthProfiles: youth } : null;
   } catch (err) {
     console.error("Error fetching profile: " + err);
     return null;
   }
 }
 
-// Save or update profile for a (verified) Google User ID
-function saveOrUpdateUserProfile(googleUserId, profileData) {
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
-    saveOrUpdateUserProfileLocked_(googleUserId, profileData);
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function saveOrUpdateUserProfileLocked_(googleUserId, profileData) {
+function saveProfileAndYouth_(writerEmail, profileData) {
   var ss = getSpreadsheet_('trips');
-  var sheet = ss.getSheetByName('Profiles');
-  var headers = [];
-  var id = String(googleUserId);
+  var sheet = ss.getSheetByName('Profiles') || ss.insertSheet('Profiles');
+  var scoutName = String(profileData['Youth Name'] || profileData['Scout Name'] || '').trim();
+  if (!scoutName) return;
 
-  // 1. Ensure the Profiles sheet and the ID column exist
-  if (!sheet) {
-    sheet = ss.insertSheet('Profiles');
-    headers = ["Google ID"];
+  var headers = ['Scout Name', 'Birth Month', 'Home Patrol', 'Authorized Emails', 'Emergency Phone', 'Emergency Phone 2', 'Medical Notes'];
+  if (sheet.getLastRow() === 0) {
     sheet.appendRow(headers);
-    sheet.getRange(1, 1).setFontWeight("bold");
-  } else {
-    var lastCol = sheet.getLastColumn();
-    if (lastCol > 0) {
-      headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
-        return h.toString().trim();
-      });
-    }
-    if (headers.length === 0 || headers[0] === "") {
-      headers = ["Google ID"];
-      sheet.getRange(1, 1).setValue("Google ID").setFontWeight("bold");
-    }
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
   }
 
-  var headerMap = {};
-  headers.forEach(function(h, idx) {
-    if (h !== "") headerMap[h] = idx;
-  });
+  var values = sheet.getDataRange().getDisplayValues();
+  var sheetHeaders = values[0].map(function(h) { return h.toString().trim(); });
+  var nameCol = sheetHeaders.indexOf('Scout Name');
+  var authCol = sheetHeaders.indexOf('Authorized Emails');
+  var targetRow = -1;
 
-  // 2. Create columns for new profile fields
-  Object.keys(profileData).forEach(function(key) {
-    if (key.startsWith('_') || key === 'Google ID') return;
-
-    if (!(key in headerMap)) {
-      var newColIdx = headers.length;
-      sheet.getRange(1, newColIdx + 1).setValue(key).setFontWeight("bold");
-      headers.push(key);
-      headerMap[key] = newColIdx;
-    }
-  });
-
-  var data = sheet.getDataRange().getValues();
-  var rowIndex = -1;
-
-  // 3. Find if this user already has a row (string comparison)
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === id) {
-      rowIndex = i + 1; // Apps Script ranges are 1-based, array is 0-based
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][nameCol]).trim().toLowerCase() === scoutName.toLowerCase()) {
+      targetRow = i + 1;
       break;
     }
   }
 
-  var existingRow = rowIndex > 0 ? data[rowIndex - 1] : [];
-
-  // 4. Fields not in this save keep their previously saved value.
-  var rowPayload = headers.map(function(header, idx) {
-    if (header === "Google ID") return id;
-
-    var incoming = profileData[header];
-    if (incoming !== undefined && incoming !== null) {
-      return Array.isArray(incoming) ? incoming.join(', ') : incoming;
+  var existingAuth = targetRow !== -1 ? String(values[targetRow - 1][authCol] || '') : writerEmail;
+  var authEmailsList = existingAuth.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
+  if (writerEmail && authEmailsList.map(function(e) { return e.toLowerCase(); }).indexOf(writerEmail.toLowerCase()) === -1) {
+    authEmailsList.push(writerEmail);
+  }
+  var extraAuth = String(profileData['Authorized Emails'] || '').split(',').map(function(e) { return e.trim(); }).filter(Boolean);
+  extraAuth.forEach(function(e) {
+    if (authEmailsList.map(function(item) { return item.toLowerCase(); }).indexOf(e.toLowerCase()) === -1) {
+      authEmailsList.push(e);
     }
-    var prev = existingRow[idx];
-    return prev !== undefined ? prev : "";
   });
 
-  // 5. Force column A to plain text so the long numeric Google ID isn't rounded.
-  var targetRow = rowIndex > 0 ? rowIndex : sheet.getLastRow() + 1;
-  sheet.getRange(targetRow, 1).setNumberFormat('@');
-  sheet.getRange(targetRow, 1, 1, rowPayload.length).setValues([rowPayload]);
-}
+  var row = [
+    scoutName,
+    String(profileData['Birth Month'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Birth Month')] : '')).trim(),
+    String(profileData['Home Patrol'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Home Patrol')] : '')).trim(),
+    authEmailsList.join(', '),
+    String(profileData['Youth Emergency Phone'] || profileData['Emergency Phone'] || '').trim(),
+    String(profileData['Youth Home Phone'] || profileData['Emergency Phone 2'] || '').trim(),
+    String(profileData['Medical Notes'] || '').trim()
+  ];
 
-
-// ---------------------------------------------------------------------------
-// MULTIPLE YOUTH PER PARENT
-// 'Youth ...' fields are stored one row per scout in a 'Youth Profiles' sheet
-// (key: Google ID + Youth Name). Everything else stays in the single-row
-// 'Profiles' sheet.
-// ---------------------------------------------------------------------------
-
-function saveProfileAndYouth_(googleUserId, fields) {
-  var parentFields = {};
-  var youthFields = {};
-  Object.keys(fields).forEach(function(k) {
-    if (k.indexOf('Youth ') === 0) youthFields[k] = fields[k];
-    else parentFields[k] = fields[k];
-  });
-  saveOrUpdateUserProfile(googleUserId, parentFields);
-  saveYouthProfile_(googleUserId, youthFields);
-}
-
-function saveYouthProfile_(googleUserId, youthFields) {
-  var name = String(youthFields['Youth Name'] || '').trim();
-  if (!name) return;
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var ss = getSpreadsheet_('trips');
-    var sheet = ss.getSheetByName('Youth Profiles');
-    if (!sheet) {
-      sheet = ss.insertSheet('Youth Profiles');
-      sheet.appendRow(['Google ID']);
-      sheet.getRange(1, 1).setFontWeight('bold');
+    if (targetRow !== -1) {
+      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
     }
-    var headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0]
-      .map(function(h) { return h.toString().trim(); });
-    Object.keys(youthFields).forEach(function(key) {
-      if (headers.indexOf(key) === -1) {
-        sheet.getRange(1, headers.length + 1).setValue(key).setFontWeight('bold');
-        headers.push(key);
-      }
-    });
-
-    var id = String(googleUserId);
-    var nameCol = headers.indexOf('Youth Name');
-    var data = sheet.getDataRange().getValues();
-    var rowIndex = -1;
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === id &&
-          String(data[i][nameCol]).trim().toLowerCase() === name.toLowerCase()) {
-        rowIndex = i + 1;
-        break;
-      }
-    }
-    var existing = rowIndex > 0 ? data[rowIndex - 1] : [];
-    var row = headers.map(function(h, idx) {
-      if (h === 'Google ID') return id;
-      var v = youthFields[h];
-      if (v !== undefined && v !== null) return v;
-      return existing[idx] !== undefined ? existing[idx] : '';
-    });
-    var target = rowIndex > 0 ? rowIndex : sheet.getLastRow() + 1;
-    sheet.getRange(target, 1).setNumberFormat('@');
-    sheet.getRange(target, 1, 1, row.length).setValues([row]);
   } finally {
     lock.releaseLock();
-  }
-}
-
-function getYouthProfiles_(googleUserId) {
-  try {
-    var sheet = getSpreadsheet_('trips').getSheetByName('Youth Profiles');
-    if (!sheet) return [];
-    var data = sheet.getDataRange().getValues();
-    if (data.length < 2) return [];
-    var headers = data[0].map(function(h) { return h.toString().trim(); });
-    var id = String(googleUserId);
-    var out = [];
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]) !== id) continue;
-      var y = {};
-      for (var j = 1; j < headers.length; j++) {
-        if (headers[j] === '') continue;
-        var v = data[i][j];
-        if (v instanceof Date) v = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        y[headers[j]] = v;
-      }
-      out.push(y);
-    }
-    return out;
-  } catch (err) {
-    console.error('Error fetching youth profiles: ' + err);
-    return [];
   }
 }

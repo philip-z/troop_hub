@@ -36,12 +36,17 @@ function getTripConfig_(ss, tripId) {
 
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][idCol]).trim() !== id) continue;
-    var row = values[i], config = {};
-    headers.forEach(function(h, j) { if (h !== '') config[h] = row[j]; });
-    config._tripRevision = Utilities.base64EncodeWebSafe(
-      Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify([headers, row]), Utilities.Charset.UTF_8)
-    ).replace(/=+$/, '');
-    return config;
+    return tripRowConfig_(headers, values[i]);
   }
   return null;
+}
+
+// Builds the config object (keyed by header, plus _tripRevision) for one Trips row.
+function tripRowConfig_(headers, row) {
+  var config = {};
+  headers.forEach(function(h, j) { if (h !== '') config[h] = row[j]; });
+  config._tripRevision = Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify([headers, row]), Utilities.Charset.UTF_8)
+  ).replace(/=+$/, '');
+  return config;
 }

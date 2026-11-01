@@ -28,11 +28,28 @@
     idToken = token;
     try {
       email = claims.email || "";
-      perms = Object.assign({}, NO_PERMS, (await api("hubSession")).permissions);
+      let res;
+      const cachedSession = sessionStorage.getItem('troop58_session');
+      const cachedToken = sessionStorage.getItem('troop58_session_token');
+      if (cachedSession && cachedToken === token) {
+        res = JSON.parse(cachedSession);
+      } else {
+        res = await api("hubSession");
+        sessionStorage.setItem('troop58_session', JSON.stringify(res));
+        sessionStorage.setItem('troop58_session_token', token);
+      }
+      perms = Object.assign({}, NO_PERMS, res.permissions);
+      if (res.trips) {
+        trips = res.trips;
+        sessionStorage.setItem('troop58_trips', JSON.stringify(trips));
+      }
       await showApp();
     } catch (e) { msg(e.message, true); }
   }
   function onSignOut() {
+    sessionStorage.removeItem('troop58_session');
+    sessionStorage.removeItem('troop58_session_token');
+    sessionStorage.removeItem('troop58_trips');
     idToken = null; email = ""; perms = NO_PERMS;
     loaded.equipment = loaded.meals = false; equipment = []; recipes = [];
     $("equipment").textContent = ""; $("equipment-status").textContent = "";
@@ -44,7 +61,12 @@
     $("add-trip").hidden = !perms.addTrips;
     $("equipment-link").href = C.EQUIPMENT_FORM_URL;
     selectTab(location.hash.slice(1), false);
-    await loadTrips();
+    if (!trips.length) {
+      await loadTrips();
+    } else {
+      renderTrips();
+      msg("");
+    }
   }
 
   // Tabs (ARIA tabs pattern): click, Left/Right/Home/End, and #trips / #equipment / #meals deep links.

@@ -34,25 +34,47 @@ function clearLeaderState() {
 
 let templates = [];
 
+function applyTemplates(list) {
+  templates = list;
+  const sel = document.getElementById('copyFrom');
+  sel.length = 1;
+  templates.forEach((t, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = t.tripTitle + (t.tripDates ? ' (' + t.tripDates + ')' : '');
+    sel.appendChild(o);
+  });
+  document.getElementById('copyRow').hidden = !templates.length;
+}
+
+// The hub's session response (cached in sessionStorage by hub.js) already includes the
+// templates for leaders, so arriving from the hub needs no server call.
+function cachedTemplates(token) {
+  try {
+    if (sessionStorage.getItem('troop58_session_token') !== token) return null;
+    const s = JSON.parse(sessionStorage.getItem('troop58_session') || 'null');
+    return s && Array.isArray(s.templates) ? s.templates : null;
+  } catch (e) { return null; }
+}
+
 // Optional: if this fails the form still works, just without the copy dropdown.
-function loadTemplates() {
+function loadTemplates(forceRefresh) {
   const token = leaderIdToken;
+  const cached = forceRefresh ? null : cachedTemplates(token);
+  if (cached) { applyTemplates(cached); return; }
   fetch(APPS_SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: 'listTripTemplates', idToken: token }) })
     .then(res => res.json())
     .then(r => {
       if (token !== leaderIdToken || r.status !== 'success') return;
-      templates = r.trips;
-      const sel = document.getElementById('copyFrom');
-      sel.length = 1;
-      templates.forEach((t, i) => {
-        const o = document.createElement('option');
-        o.value = String(i);
-        o.textContent = t.tripTitle + (t.tripDates ? ' (' + t.tripDates + ')' : '');
-        sel.appendChild(o);
-      });
-      document.getElementById('copyRow').hidden = !templates.length;
+      applyTemplates(r.trips);
     })
     .catch(err => console.error(err));
+}
+
+// A new trip makes the hub's cached session (trips list and templates) out of date;
+// dropping it makes the hub fetch a fresh one next time it opens.
+function invalidateHubCache() {
+  ['troop58_session', 'troop58_session_token', 'troop58_trips'].forEach(k => sessionStorage.removeItem(k));
 }
 
 const COPY_FIELDS = ['tripTitle', 'tripLocation', 'departureDetails', 'departureOptions', 'returnDetails', 'tripCost', 'tripCoordinator', 'tripUniform'];
@@ -92,7 +114,8 @@ function submitTrip(e) {
       if (r.status === 'success') {
         setMessage('Trip added.', false);
         form.reset();
-        loadTemplates();
+        invalidateHubCache();
+        loadTemplates(true);
       } else if (r.code === 'signin') {
         TroopAuth.signOut();
         setMessage(r.message + ' Your entries are still in the form.', true);

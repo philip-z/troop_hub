@@ -118,8 +118,47 @@ function showTripUnavailable(message) {
   if (form) form.hidden = true;
 }
 
+function applyTripDetails(data) {
+  Object.keys(data).forEach(key => {
+    const val = data[key];
+    if (val === undefined || val === null) return;
+    if (key === '_tripRevision') {
+      window.currentTripId = val;
+      return;
+    }
+    // An empty override must not wipe the standard departure text inside this span.
+    if (key === 'customDepartureHtml' && String(val).trim() === '') return;
+
+    const element = document.getElementById(key);
+    if (element) {
+      if (typeof val === 'string' && (val.includes('<') && val.includes('>'))) {
+        element.innerHTML = val;
+      } else if ('value' in element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT')) {
+        element.value = val;
+      } else {
+        element.innerText = val;
+      }
+    }
+  });
+}
+
+// The hub caches each open trip's slip config (the same data slipTrip returns) in
+// sessionStorage, so arriving from the hub needs no server call. Edits made to the sheet
+// afterwards are caught on submit by the _tripRevision check.
+function cachedTripDetails() {
+  try {
+    const trips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
+    const trip = trips.find(t => t && t.id === TRIP_ID);
+    return trip && trip.slip ? trip.slip : null;
+  } catch (e) { return null; }
+}
+
 function loadTripDetails() {
   if (!TRIP_ID) { showTripUnavailable('No trip selected. Open this form from the trip list.'); return; }
+
+  const cached = cachedTripDetails();
+  if (cached) { applyTripDetails(cached); return; }
+
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({ action: 'slipTrip', tripId: TRIP_ID, idToken: window.currentIdToken })
@@ -128,27 +167,7 @@ function loadTripDetails() {
     .then(data => {
       if (data.code === 'signin') { TroopAuth.signOut(); return; }
       if (data.status === 'error') { showTripUnavailable(data.message || 'This trip is unavailable.'); return; }
-      Object.keys(data).forEach(key => {
-        const val = data[key];
-        if (val === undefined || val === null) return;
-        if (key === '_tripRevision') {
-          window.currentTripId = val;
-          return;
-        }
-        // An empty override must not wipe the standard departure text inside this span.
-        if (key === 'customDepartureHtml' && String(val).trim() === '') return;
-
-        const element = document.getElementById(key);
-        if (element) {
-          if (typeof val === 'string' && (val.includes('<') && val.includes('>'))) {
-            element.innerHTML = val;
-          } else if ('value' in element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT')) {
-            element.value = val;
-          } else {
-            element.innerText = val;
-          }
-        }
-      });
+      applyTripDetails(data);
     })
     .catch(err => console.error("Error loading trip data:", err));
 }
