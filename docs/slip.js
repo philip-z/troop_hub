@@ -97,6 +97,109 @@ document.addEventListener('DOMContentLoaded', function() {
   const signOutBtn = document.getElementById('signOutBtn');
   if (signOutBtn) signOutBtn.addEventListener('click', TroopAuth.signOut);
 
+  const manageProfilesBtn = document.getElementById('manageProfilesBtn');
+  const profilesDialog = document.getElementById('profilesDialog');
+  const closeProfilesModal = document.getElementById('closeProfilesModal');
+  const profilesModalForm = document.getElementById('profilesModalForm');
+  const modalScoutSelect = document.getElementById('modalScoutSelect');
+
+  const modalProfileSelect = document.getElementById('modalProfileSelect');
+  const youthExtraFields = document.getElementById('youthExtraFields');
+  const adultExtraFields = document.getElementById('adultExtraFields');
+
+  if (manageProfilesBtn && profilesDialog) {
+    manageProfilesBtn.addEventListener('click', () => {
+      populateModalProfileDropdown();
+      profilesDialog.showModal();
+    });
+  }
+  if (closeProfilesModal && profilesDialog) {
+    closeProfilesModal.addEventListener('click', () => profilesDialog.close());
+  }
+
+  if (modalProfileSelect) {
+    modalProfileSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      const isAdultKind = val === 'add_adult' || (val !== '' && val !== 'add_scout' && window.userProfilesMap && window.userProfilesMap[val] && window.userProfilesMap[val].kind === 'adult');
+      
+      if (youthExtraFields) youthExtraFields.hidden = isAdultKind;
+      if (adultExtraFields) adultExtraFields.hidden = !isAdultKind;
+      document.getElementById('modalProfileKind').value = isAdultKind ? 'adult' : 'youth';
+
+      if (val === '' || val === 'add_scout' || val === 'add_adult') {
+        document.getElementById('modalScoutName').value = '';
+        document.getElementById('modalGender').value = '';
+        document.getElementById('modalBirthMonth').value = '';
+        document.getElementById('modalHomePatrol').value = '';
+        document.getElementById('modalAuthorizedEmails').value = '';
+        document.getElementById('modalEmergencyPhone').value = '';
+        document.getElementById('modalMedicalNotes').value = '';
+        if (adultExtraFields) {
+          document.getElementById('modalVehicleMake').value = '';
+          document.getElementById('modalAvailableSeats').value = '';
+          document.getElementById('modalYptDate').value = '';
+        }
+      } else if (window.userProfilesMap && window.userProfilesMap[val]) {
+        const p = window.userProfilesMap[val];
+        document.getElementById('modalScoutName').value = p['Name'] || p['Youth Name'] || p['Adult Name'] || '';
+        document.getElementById('modalGender').value = p['Gender'] || '';
+        document.getElementById('modalBirthMonth').value = p['Birth Month'] || '';
+        document.getElementById('modalHomePatrol').value = p['Home Patrol'] || '';
+        document.getElementById('modalAuthorizedEmails').value = p['Authorized Emails'] || '';
+        document.getElementById('modalEmergencyPhone').value = p['Emergency Phone'] || p['Youth Emergency Phone'] || p['Adult Emergency Phone'] || '';
+        document.getElementById('modalMedicalNotes').value = p['Medical Notes'] || '';
+        if (adultExtraFields && isAdultKind) {
+          document.getElementById('modalVehicleMake').value = p['Vehicle Make'] || '';
+          document.getElementById('modalAvailableSeats').value = p['Available Seats'] || '';
+          document.getElementById('modalYptDate').value = p['Ypt Date'] || '';
+        }
+      }
+    });
+  }
+
+  if (profilesModalForm) {
+    profilesModalForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const kind = document.getElementById('modalProfileKind').value;
+      const name = document.getElementById('modalScoutName').value.trim();
+      if (!name) return;
+
+      const profileData = {
+        'Profile Kind': kind,
+        'Name': name,
+        'Gender': document.getElementById('modalGender').value.trim(),
+        'Authorized Emails': document.getElementById('modalAuthorizedEmails').value.trim(),
+        'Emergency Phone': document.getElementById('modalEmergencyPhone').value.trim(),
+        'Medical Notes': document.getElementById('modalMedicalNotes').value.trim()
+      };
+      if (kind === 'youth') {
+        profileData['Youth Name'] = name;
+        profileData['Birth Month'] = document.getElementById('modalBirthMonth').value.trim();
+        profileData['Home Patrol'] = document.getElementById('modalHomePatrol').value.trim();
+        profileData['Youth Emergency Phone'] = profileData['Emergency Phone'];
+      } else {
+        profileData['Adult Name'] = name;
+        profileData['Vehicle Make'] = document.getElementById('modalVehicleMake').value.trim();
+        profileData['Available Seats'] = document.getElementById('modalAvailableSeats').value.trim();
+        profileData['Ypt Date'] = document.getElementById('modalYptDate').value.trim();
+        profileData['Adult Emergency Phone'] = profileData['Emergency Phone'];
+      }
+
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, profileData })
+      })
+        .then(res => res.json())
+        .then(r => {
+          if (r.status === 'success') {
+            profilesDialog.close();
+            loadUserProfile(window.currentUserGoogleId || 'user');
+          }
+        })
+        .catch(err => console.error('Error saving profile:', err));
+    });
+  }
+
   toggleFormType();
   updatePrintHeader();
 });
