@@ -1,19 +1,26 @@
 (function () {
   const C = window.TROOP_CONFIG;
   const $ = (id) => document.getElementById(id);
-  let idToken = null, trips = [], currentTripResponses = [];
+  let idToken = null, userEmail = "", trips = [], currentTripResponses = [];
 
   async function api(action, payload) {
-    const res = await fetch(C.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    const d = await res.json();
+    let res;
+    try {
+      res = await fetch(C.APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
+      });
+    } catch (e) {
+      throw Object.assign(new Error("There is no connection to the server."), { network: true });
+    }
+    if (!res.ok) throw Object.assign(new Error("Server error " + res.status), { retry: true });
+    let d;
+    try { d = await res.json(); }
+    catch (e) { throw Object.assign(new Error("The server sent a reply that could not be read."), { retry: true }); }
     if (d.status === "error" || d.error) {
       if (d.code === "signin") TroopAuth.signOut();
-      throw new Error(d.message || d.error);
+      throw Object.assign(new Error(d.message || d.error), { code: d.code });
     }
     return d;
   }
@@ -22,6 +29,7 @@
 
   async function onSignIn(token, claims) {
     idToken = token;
+    userEmail = String(claims.email || "").toLowerCase();
     const email = claims.email || claims.name || "";
     setSignedInUI(email);
     $("app").hidden = false;
@@ -31,10 +39,10 @@
       return;
     }
 
-    // 1. Load trip metadata instantly from sessionStorage cache
+    // 1. Load trip metadata instantly from the session saved on this device (by hub.js)
     try {
-      const cachedTrips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-      const trip = cachedTrips.find(t => String(t.tripId) === String(TRIP_ID));
+      const saved = TroopOffline.cacheGet(userEmail, 'session');
+      const trip = ((saved && saved.data.trips) || []).find(t => String(t.tripId) === String(TRIP_ID));
       if (trip) {
         $("planTripTitle").textContent = trip.tripTitle;
         $("planTripDate").textContent = trip.tripDates;
@@ -46,11 +54,25 @@
     try {
       const res = await api("hubFloatPlan", { tripId: TRIP_ID });
       currentTripResponses = res.responses || [];
+      TroopOffline.cacheSet(userEmail, "roster:" + TRIP_ID, currentTripResponses);
+      $("floatPlanOffline").hidden = true;
       renderFloatPlanData(currentTripResponses);
       loadGearChecklist();
       $("floatPlanContent").hidden = false;
     } catch (err) {
       console.error("Error loading responses:", err);
+      // No connection (or the server isn't answering): use the roster this device saved last time.
+      const saved = (err.network || err.retry) && TroopOffline.cacheGet(userEmail, "roster:" + TRIP_ID);
+      if (saved) {
+        currentTripResponses = saved.data;
+        $("floatPlanError").hidden = true;
+        $("floatPlanOffline").textContent = "No connection: showing the roster saved on this device on " + new Date(saved.at).toLocaleString() + ". It may be out of date.";
+        $("floatPlanOffline").hidden = false;
+        renderFloatPlanData(currentTripResponses);
+        loadGearChecklist();
+        $("floatPlanContent").hidden = false;
+        return;
+      }
       // Say why (e.g. not a leader who manages trips) instead of showing an empty roster as if it were real.
       $("floatPlanError").textContent = "Could not load the roster: " + err.message;
       $("floatPlanError").hidden = false;
@@ -264,5 +286,5 @@
     onSignIn: (token, claims) => onSignIn(token, claims),
     onSignOut: onSignOut
   });
-  $("signOutBtn").onclick = TroopAuth.signOut;
+  $("signOutBtn").onclick = TroopAuth.userSignOut;
 })();

@@ -1,6 +1,7 @@
 const APPS_SCRIPT_URL = TROOP_CONFIG.APPS_SCRIPT_URL;
 
 let leaderIdToken = null;
+let leaderEmail = '';
 
 function setMessage(text, isError) {
   const el = document.getElementById('leaderMessage');
@@ -20,6 +21,7 @@ function showSignedIn(email) {
 // Shared sign-in (auth.js): also restores a sign-in made on another page of this site.
 function handleLeaderCredential(token, claims) {
   leaderIdToken = token;
+  leaderEmail = String(claims.email || '').toLowerCase();
   showSignedIn(claims.email);
   setMessage('', false);
   loadTemplates();
@@ -27,6 +29,7 @@ function handleLeaderCredential(token, claims) {
 
 function clearLeaderState() {
   leaderIdToken = null;
+  leaderEmail = '';
   showSignedIn(null);
   templates = [];
   document.getElementById('copyRow').hidden = true;
@@ -47,20 +50,19 @@ function applyTemplates(list) {
   document.getElementById('copyRow').hidden = !templates.length;
 }
 
-// The hub's session response (cached in sessionStorage by hub.js) already includes the
+// The hub's session response (saved on this device by hub.js) already includes the
 // templates for leaders, so arriving from the hub needs no server call.
-function cachedTemplates(token) {
+function cachedTemplates() {
   try {
-    if (sessionStorage.getItem('troop58_session_token') !== token) return null;
-    const s = JSON.parse(sessionStorage.getItem('troop58_session') || 'null');
-    return s && Array.isArray(s.templates) ? s.templates : null;
+    const saved = TroopOffline.cacheGet(leaderEmail, 'session');
+    return saved && Array.isArray(saved.data.templates) ? saved.data.templates : null;
   } catch (e) { return null; }
 }
 
 // Optional: if this fails the form still works, just without the copy dropdown.
 function loadTemplates(forceRefresh) {
   const token = leaderIdToken;
-  const cached = forceRefresh ? null : cachedTemplates(token);
+  const cached = forceRefresh ? null : cachedTemplates();
   if (cached) { applyTemplates(cached); return; }
   fetch(APPS_SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: 'listTripTemplates', idToken: token }) })
     .then(res => res.json())
@@ -71,10 +73,10 @@ function loadTemplates(forceRefresh) {
     .catch(err => console.error(err));
 }
 
-// A new trip makes the hub's cached session (trips list and templates) out of date;
-// dropping it makes the hub fetch a fresh one next time it opens.
+// A new trip makes the hub's saved session (trips list and templates) out of date; marking it
+// stale makes the hub refresh it next time it opens (the old copy still works offline until then).
 function invalidateHubCache() {
-  ['troop58_session', 'troop58_session_token', 'troop58_trips'].forEach(k => sessionStorage.removeItem(k));
+  TroopOffline.cacheStale(leaderEmail, 'session');
 }
 
 // Fills every named input that the template has a value for, except those marked
@@ -97,7 +99,7 @@ TroopAuth.start({ buttonId: 'signInBtn', buttonSize: 'large', onSignIn: handleLe
 window.addEventListener('load', function() {
   document.getElementById('tripForm').addEventListener('submit', submitTrip);
   document.getElementById('copyFrom').addEventListener('change', copyFromTrip);
-  document.getElementById('signOutBtn').addEventListener('click', TroopAuth.signOut);
+  document.getElementById('signOutBtn').addEventListener('click', TroopAuth.userSignOut);
 });
 
 function submitTrip(e) {

@@ -107,7 +107,10 @@ function ensureSheetHeaders_(sheet, requiredHeaders) {
 // ---------------------------------------------------------------------------
 
 // Columns the server fills itself on hub records (see Hub.gs hubServerFields_).
-var SERVER_COLUMNS = { timestamp: 'Timestamp', tripId: 'Trip ID', tripName: 'Trip' };
+// enteredAt: when the person entered it on their device (it may reach the server much later,
+// if it was queued offline); clientId: the device's unique ID for the entry, so a retry is
+// recognized and not written twice.
+var SERVER_COLUMNS = { timestamp: 'Timestamp', enteredAt: 'Entered At', tripId: 'Trip ID', tripName: 'Trip', clientId: 'Client ID' };
 var SHEET_CELL_MAX = 1000;
 var MAX_RECORD_FIELDS = 40;
 var MAX_SHEET_COLUMNS = 60;
@@ -175,6 +178,16 @@ function planRecord_(existingHeaders, fields, before, after, opts) {
     return { error: 'That sheet already has too many columns.' };
   }
   return { required: required, values: values, added: added };
+}
+
+// True when some data row has exactly `value` (as text) under the header `headerName`.
+function columnHasValue_(sheet, headerName, value) {
+  if (!sheet || sheet.getLastRow() < 2) return false;
+  var idx = getSheetHeaders_(sheet).map(function(h) { return h.toLowerCase(); }).indexOf(String(headerName).toLowerCase());
+  if (idx === -1) return false;
+  return sheet.getRange(2, idx + 1, sheet.getLastRow() - 1, 1).getValues().some(function(r) {
+    return String(r[0]) === String(value);
+  });
 }
 
 // Appends one row, adding any headers the sheet doesn't have yet (logged via logEvent_).

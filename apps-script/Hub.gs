@@ -141,31 +141,82 @@ function hubListTrips_() {
   return trips;
 }
 
+// Every column name the browser may not send for this kind of record.
+function hubReservedNames_(spec) {
+  var names = Object.keys(SERVER_COLUMNS).map(function(k) { return SERVER_COLUMNS[k]; });
+  names.push(spec.byColumn);
+  if (spec.photoColumn) names.push(spec.photoColumn);
+  return names;
+}
+
+var CLIENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
+var ENTERED_AT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+var LATE_AFTER_MS = 2 * 60 * 1000;
+
+// Pure. What the device says about this entry: { clientId, enteredAt (Date or null), late }.
+// An entry the person made offline can reach the server days later, so the page sends the time
+// it was entered and a unique ID. The clientId is kept only if well-formed; enteredAt only if it
+// is a real time within the last 90 days (a time slightly in the future is clamped to now).
+// `late` means it arrived more than a couple of minutes after it was entered, which is how a
+// queued entry is recognized (see hubAppendRecord_ for what that changes). A device can claim
+// to be late, so this only relaxes the "trip is closed" check, never anything about who may do what.
+function hubMeta_(data, now) {
+  now = now || new Date();
+  var clientId = String(data && data.clientId || '');
+  if (!CLIENT_ID_PATTERN.test(clientId)) clientId = '';
+  var entered = null;
+  var parsed = new Date(String(data && data.enteredAt || ''));
+  if (data && data.enteredAt && isFinite(parsed.getTime()) && now.getTime() - parsed.getTime() <= ENTERED_AT_MAX_AGE_MS) {
+    entered = parsed.getTime() > now.getTime() ? now : parsed;
+  }
+  return { clientId: clientId, enteredAt: entered, late: !!entered && now.getTime() - entered.getTime() > LATE_AFTER_MS };
+}
+
 // The columns the server fills itself for this kind of record, as { before, after }
 // objects of header -> value. `before` goes ahead of the form's fields, `after` behind.
-function hubServerFields_(spec, trip, photoUrl, email) {
+// meta (from hubMeta_) is optional: its columns are added only when the device sent them.
+function hubServerFields_(spec, trip, photoUrl, email, meta) {
   var text = function(v) { return v === undefined || v === null ? '' : String(v); };
   var before = {}, after = {};
   before[SERVER_COLUMNS.timestamp] = new Date();
+  if (meta && meta.enteredAt) before[SERVER_COLUMNS.enteredAt] = meta.enteredAt;
   before[SERVER_COLUMNS.tripId] = text(trip.tripId);
   before[SERVER_COLUMNS.tripName] = text(trip.tripTitle); // from the sheet, not the browser
   if (spec.photoColumn) after[spec.photoColumn] = photoUrl || '';
   after[spec.byColumn] = email;
+  if (meta && meta.clientId) after[SERVER_COLUMNS.clientId] = meta.clientId;
   return { before: before, after: after };
 }
 
-// data: { tripId, values (form field name -> value), photo: { data } (optional) }.
+// True when this device entry was already written (a retry after a lost reply).
+function hubAlreadySaved_(spec, meta) {
+  if (!meta.clientId) return false;
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.tab, false);
+  } catch (e) {
+    return false;
+  }
+  return columnHasValue_(sheet, SERVER_COLUMNS.clientId, meta.clientId);
+}
+
+// data: { tripId, values (form field name -> value), photo: { data } (optional),
+//         clientId, enteredAt (optional: see hubMeta_) }.
 // The trip always comes from the sheet; the browser never supplies the photo link.
+// An entry that arrives late (it was made offline) is still accepted when the trip has stopped
+// taking that kind of record in the meantime, since the expense really happened.
 function hubAppendRecord_(spec, data, email) {
+  var meta = hubMeta_(data);
   var trip = getTripConfig_(getSpreadsheet_('trips'), data.tripId);
   if (!trip) return hubError_('not_found', 'Trip not found.');
   if (spec.tripFlag && !isTruthy_(trip[spec.tripFlag])) {
-    return hubError_('closed', spec.closedMessage || 'This trip is not accepting that.');
+    if (!meta.late) return hubError_('closed', spec.closedMessage || 'This trip is not accepting that.');
+    logEvent_('late record accepted', spec.tab + ': trip ' + trip.tripId + ' closed, entered ' + meta.enteredAt.toISOString());
   }
+  if (hubAlreadySaved_(spec, meta)) return { status: 'success', duplicate: true };
 
   // Validate the fields before uploading anything.
-  var server = hubServerFields_(spec, trip, '', email);
-  var clean = cleanRecordFields_(data.values, Object.keys(server.before).concat(Object.keys(server.after)));
+  var clean = cleanRecordFields_(data.values, hubReservedNames_(spec));
   if (clean.error) return hubError_('invalid', clean.error);
 
   var url = '';
@@ -174,11 +225,12 @@ function hubAppendRecord_(spec, data, email) {
     if (saved.error) return saved.error;
     url = saved.url;
   }
-  server = hubServerFields_(spec, trip, url, email);
+  var server = hubServerFields_(spec, trip, url, email, meta);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
+    if (hubAlreadySaved_(spec, meta)) return { status: 'success', duplicate: true };
     var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.tab, true);
     var result = appendRecord_(sheet, clean.fields, server.before, server.after);
     if (result.error) return hubError_('invalid', result.error);

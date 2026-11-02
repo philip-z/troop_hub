@@ -95,13 +95,11 @@ function handlePermissionPost_(raw, data) {
   if (!isTruthy_(trip.acceptingResponses)) {
     return jsonOut_({ status: 'error', code: 'closed', message: 'This trip is no longer accepting permission slips.' });
   }
-  if (!submittedTripRevision || submittedTripRevision !== trip._tripRevision) {
-    return jsonOut_({
-      status: 'error',
-      code: 'trip_changed',
-      message: 'Trip details have changed. Reload the page, review the updated trip details, and sign again.'
-    });
-  }
+  // A slip is accepted even if the trip was edited while the person was filling it out (or
+  // while they were offline): what they actually saw and signed is recorded in wordingHash, and
+  // the Flags column says the trip changed, so a leader can follow up if it matters.
+  if (!submittedTripRevision) flags.push('No trip revision');
+  else if (submittedTripRevision !== trip._tripRevision) flags.push('Trip changed after the form loaded');
 
   // Always overwrite server-controlled columns so a client can't spoof them.
   data['tripId'] = displayValue_(trip.tripId); // always from the Trips sheet, never the browser

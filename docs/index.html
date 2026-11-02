@@ -18,6 +18,12 @@
     </div>
   </header>
   <p id="msg" role="status"></p>
+  <p id="stale-note" role="status" hidden>You're offline, or the server isn't answering. Showing the trips saved on this device.</p>
+  <section id="outbox" aria-label="Saved items" hidden>
+    <p id="outbox-summary" role="status"></p>
+    <ul id="outbox-list"></ul>
+    <button id="outbox-send" type="button" hidden>Send now</button>
+  </section>
 
   <main id="app" hidden>
     <div class="tabs" role="tablist" aria-label="Hub sections">
@@ -95,6 +101,7 @@
 
   <script src="config.js"></script>
   <script src="auth.js"></script>
+  <script src="offline.js"></script>
   <script src="lib.js"></script>
   <script src="hub.js"></script>
 </body>

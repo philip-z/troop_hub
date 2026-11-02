@@ -131,5 +131,19 @@ window.TroopAuth = (function () {
     if (onSignOutCb) onSignOutCb();
   }
 
-  return { start, signOut, parseJwt, getToken: stored };
+  // What the "Sign out" buttons call. Unlike signOut(), which also runs when a session simply
+  // expires (and must leave the offline outbox and cache alone), this is the person choosing to
+  // leave: saved trips, rosters, profiles and drafts are deleted from this device (offline.js).
+  async function userSignOut() {
+    const offline = window.TroopOffline;
+    if (offline) {
+      let pending = 0;
+      try { pending = await offline.outbox.countAll(); } catch (e) { /* no offline storage */ }
+      if (pending && !window.confirm(pending + " saved item" + (pending === 1 ? " has" : "s have") + " not been sent yet and will be deleted if you sign out. Sign out anyway?")) return;
+      try { await offline.wipeAll(); } catch (e) { /* nothing more to clear */ }
+    }
+    signOut();
+  }
+
+  return { start, signOut, userSignOut, parseJwt, getToken: stored };
 })();

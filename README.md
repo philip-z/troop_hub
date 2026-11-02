@@ -12,6 +12,7 @@ The website lives in `docs/` (the only folder GitHub Pages publishes: Settings >
 - `forms.css`, `images/`: shared by the slip and leaders pages
 - `config.js`: client ID + web app URL shared by every page
 - `auth.js`: shared sign-in (Google, or an emailed 6-digit code for people who'd rather not use Google); the token is kept in `sessionStorage`, so one sign-in carries across all pages in the same browser tab (Google tokens about 1 hour, email sessions 2 hours). The "Remember me on this device" checkbox (unticked by default) keeps a 30-day token in `localStorage` instead; for Google sign-in the script swaps the Google token for its own 30-day token (`authExchange`). Sign out clears both. Leader actions follow the same rules as everything else.
+- `offline.js` / `sw.js`: offline support (see "Working offline" below): `offline.js` keeps the saved session and the outbox of unsent entries, `sw.js` is the service worker that keeps the pages available with no signal
 - `apps-script/` (repo root): backend. `Code.gs` (routing, Google token check, logging), `Sheets.gs` (opens the three spreadsheets by ID), `Auth.gs` (email-code sign-in + session tokens), `Trips.gs` (trip lookup + flags), `Slip.gs` (slip + profiles), `Leaders.gs` (add trip, leader permissions), `Hub.gs` (hub actions), `Library.gs` (equipment and recipe lists)
 - `dev/` (repo root): local-only mock sign-in and mock backend (`npm run dev`); not deployed
 
@@ -55,6 +56,16 @@ The design keeps column names out of the backend code: they come from input `nam
 2. To keep a column private, start its header with an underscore (e.g., `_supplier`).
 3. In `docs/index.html`, use `data-title`, `data-count`, `data-details` on the `#equipment` list to choose what to display; use `data-label` on the recipe dropdown and `data-recipe="<column>"` on recipe form inputs.
 
+## Working offline
+The aim is that a leader can open the hub and record receipts, payments and reimbursements with no signal, and that what was entered reaches the sheet once there is signal again.
+- **Pages:** `sw.js` (a service worker) saves the site's own files. It asks the network first, so an online visit always gets the latest deploy, and uses the saved copy when offline or when the network is slow. It never touches requests to the Apps Script web app or to Google.
+- **Saved session:** the hub keeps the last `hubSession` answer (permissions, trips, the add-trip templates) on the device, per signed-in email. The hub, slip and add-trip pages open from it with no call; the hub refreshes it in the background when it is more than 10 minutes old, and says so if it can't. Float plans keep the last roster they loaded and show it, marked as possibly out of date, when offline.
+- **Outbox:** a receipt, payment or reimbursement is written to the device first, then sent. If there is no signal it stays in a "waiting to be sent" list on the hub (with "Send now"), and goes out when the connection returns, the next time the hub is opened, or when the tab is shown again. If the server refuses one (say the trip no longer exists) it stays in the list as "Not accepted" with the reason, and can be retried or removed.
+- **No double entries:** each entry carries a unique ID, stored in a server-filled `Client ID` column, and the server ignores an ID it already has, so a retry after a lost reply can't add a second row. A server-filled `Entered At` column holds when it was entered on the device; `Timestamp` is when it reached the sheet.
+- **Late entries are accepted:** a receipt that reaches the server more than a couple of minutes after it was entered is recorded even if its trip has stopped accepting receipts in the meantime (it is noted in the `Log(Enabled)` tab). The same goes for permission slips whose trip details changed while the form was open: they are always accepted, and the `Flags` column says `Trip changed after the form loaded` (what the signer saw is in `wordingHash`).
+- **Signing out:** the "Sign out" button deletes the saved session, rosters, profiles, drafts and the outbox from the device (and warns first if entries haven't been sent). A session that merely expires does not, so waiting entries survive until the person signs in again.
+- **Limits to know about:** sign-in needs a connection, so tick "Remember me on this device" (a 30-day sign-in; a plain Google sign-in lasts about an hour, and entries wait for the next sign-in). The outbox is sent while the hub is open; iPhones can't send in the background. On an iPhone add the site to the Home Screen, because Safari can clear a normal tab's saved data after about a week unused. Permission slips and new trips are not queued offline yet.
+
 ## Setup
 1. Create a Google Cloud OAuth client ID (Web); add your site origin as an authorized JavaScript origin.
 2. Three spreadsheets (the script is standalone and opens each by ID; see `apps-script/Sheets.gs`). Create them, then put each ID (the long string in the sheet's URL) in Script Properties in step 3: `TRIPS_SHEET_ID`, `EQUIPMENT_SHEET_ID`, `RECIPES_SHEET_ID`. The account that deploys the web app needs edit access to all three.
@@ -75,4 +86,4 @@ The design keeps column names out of the backend code: they come from input `nam
 6. Deploy the static files: push to GitHub and enable Pages from `main` / `/docs` (or upload `docs/` to any static host). Add the Pages origin (e.g. `https://<user>.github.io`) to the OAuth client's authorized JavaScript origins.
 
 ## Tests
-`npm test`. It also loads the real `.gs` files in Node (`test/gs.test.js`, via `dev/gs-loader.js`); the dev mock uses the same loader for hub records.
+`npm test`. It also loads the real `.gs` files in Node (`test/gs.test.js`, via `dev/gs-loader.js`); the dev mock uses the same loader for hub records. `test/offline.test.js` covers the outbox, saved-session cache and sign-out wipe in `docs/offline.js` with fake storage; the service worker and the pages themselves are only checked by hand, so try them on a phone with airplane mode on.

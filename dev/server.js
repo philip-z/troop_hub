@@ -147,9 +147,11 @@ function hub(data) {
       a = auth(data, spec.permission); if (a.error) return a.error;
       const trip = tripConfig(data.tripId);
       if (!trip) return err("not_found", "Trip not found.");
-      if (spec.tripFlag && !truthy(trip[spec.tripFlag])) return err("closed", spec.closedMessage);
-      const base = gs.hubServerFields_(spec, trip, "", a.info.email);
-      const clean = gs.cleanRecordFields_(data.values, Object.keys(base.before).concat(Object.keys(base.after)));
+      const meta = gs.hubMeta_(data);
+      // An entry made offline (it arrives late) is still accepted when the trip has closed since.
+      if (spec.tripFlag && !truthy(trip[spec.tripFlag]) && !meta.late) return err("closed", spec.closedMessage);
+      if (meta.clientId && db.tables[spec.tab].some((r) => r["Client ID"] === meta.clientId)) return { status: "success", duplicate: true };
+      const clean = gs.cleanRecordFields_(data.values, gs.hubReservedNames_(spec));
       if (clean.error) return err("invalid", clean.error);
       let url = "";
       if (spec.photoColumn && data.photo && data.photo.data) {
@@ -159,7 +161,7 @@ function hub(data) {
         photos.push(buf);
         url = "http://localhost:" + PORT + "/dev/receipt/" + (photos.length - 1) + ".jpg";
       }
-      const server = gs.hubServerFields_(spec, trip, url, a.info.email);
+      const server = gs.hubServerFields_(spec, trip, url, a.info.email, meta);
       db.tables[spec.tab].push(Object.assign({}, server.before, clean.fields, server.after));
       return { status: "success" };
     }
@@ -230,9 +232,7 @@ function slipPost(data) {
   const trip = tripConfig(data._tripId);
   if (!trip) return err("not_found", "Trip not found.");
   if (!truthy(trip.acceptingResponses)) return err("closed", "This trip is no longer accepting permission slips.");
-  if (!data._tripRevision || data._tripRevision !== trip._tripRevision) {
-    return err("trip_changed", "Trip details have changed. Reload the page, review the updated trip details, and sign again.");
-  }
+  // A changed trip revision is accepted (the real script adds a note to the Flags column).
   const server = new Set(["action", "idToken", "googleUserId", "Flags", "PDF Link", "tripId", "formVersion", "wordingHash", "website_url"]);
   const row = { Timestamp: new Date().toISOString() };
   Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });

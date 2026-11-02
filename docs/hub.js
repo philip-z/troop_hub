@@ -8,53 +8,157 @@
 
   // The Apps Script web app verifies the Google ID token and enforces who may do what.
   // Sent as text/plain so the browser skips the CORS preflight Apps Script can't answer.
-  async function api(action, payload) {
-    const res = await fetch(C.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    const d = await res.json();
+  // Errors carry what the caller needs to decide whether to try again later:
+  //   err.network  no connection (or it timed out)    err.retry  the server hiccuped (bad status/reply)
+  //   err.code     the server's code, e.g. "signin" or "not_allowed"
+  async function api(action, payload, timeoutMs) {
+    const ctl = timeoutMs ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(C.APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(Object.assign({}, payload, { action, idToken })),
+        signal: ctl ? ctl.signal : undefined
+      });
+    } catch (e) {
+      throw Object.assign(new Error("There is no connection to the server."), { network: true });
+    } finally { if (timer) clearTimeout(timer); }
+    if (!res.ok) throw Object.assign(new Error("Server error " + res.status), { retry: true });
+    let d;
+    try { d = await res.json(); }
+    catch (e) { throw Object.assign(new Error("The server sent a reply that could not be read."), { retry: true }); }
     if (d.status === "error" || d.error) {
       if (d.code === "signin") TroopAuth.signOut();
-      throw new Error(d.message || d.error);
+      throw Object.assign(new Error(d.message || d.error), { code: d.code });
     }
     return d;
   }
-  const submitRecord = (kind, tripId, values, photo) => api("hubSubmit", { kind, tripId, values, photo });
+
+  // ---- Offline: saved session + outbox (see offline.js) ----
+  const O = window.TroopOffline;
+  const SESSION_FRESH_MS = 10 * 60 * 1000; // a saved session newer than this is used without asking the server
+  const KIND_LABEL = { receipt: "Receipt", payment: "Payment", reimbursement: "Reimbursement" };
+
+  function applySession(res) {
+    perms = Object.assign({}, NO_PERMS, res.permissions);
+    if (res.trips) trips = res.trips;
+  }
+  function showStale(on) { $("stale-note").hidden = !on; }
 
   async function onSignIn(token, claims) {
     idToken = token;
+    email = String(claims.email || "").toLowerCase();
     try {
-      email = claims.email || "";
-      let res;
-      const cachedSession = sessionStorage.getItem('troop58_session');
-      const cachedToken = sessionStorage.getItem('troop58_session_token');
-      if (cachedSession && cachedToken === token) {
-        res = JSON.parse(cachedSession);
+      const saved = O.cacheGet(email, "session");
+      if (saved) {
+        // Show what this device last saw straight away; refresh in the background if it is getting old.
+        applySession(saved.data);
+        await showApp();
+        if (Date.now() - saved.at > SESSION_FRESH_MS) refreshSession();
       } else {
-        res = await api("hubSession");
-        sessionStorage.setItem('troop58_session', JSON.stringify(res));
-        sessionStorage.setItem('troop58_session_token', token);
+        const res = await api("hubSession");
+        O.cacheSet(email, "session", res);
+        applySession(res);
+        await showApp();
       }
-      perms = Object.assign({}, NO_PERMS, res.permissions);
-      if (res.trips) {
-        trips = res.trips;
-        sessionStorage.setItem('troop58_trips', JSON.stringify(trips));
-      }
-      await showApp();
-    } catch (e) { msg(e.message, true); }
+    } catch (e) {
+      msg(e.network ? "You're offline and nothing is saved on this device yet. Connect once to load your trips." : e.message, true);
+    }
+    flushOutbox();
   }
+  async function refreshSession() {
+    const who = email;
+    try {
+      const res = await api("hubSession");
+      if (who !== email) return;
+      O.cacheSet(email, "session", res);
+      applySession(res);
+      showStale(false);
+      await showApp();
+    } catch (e) {
+      if (e.network || e.retry) showStale(true);
+      else if (e.code !== "signin") msg(e.message, true);
+    }
+  }
+  // Only the screen is reset here. This also runs when a session merely expires, and then the saved
+  // data and the outbox must stay; deleting them is the sign-out button's job (TroopAuth.userSignOut).
   function onSignOut() {
-    sessionStorage.removeItem('troop58_session');
-    sessionStorage.removeItem('troop58_session_token');
-    sessionStorage.removeItem('troop58_trips');
-    idToken = null; email = ""; perms = NO_PERMS;
+    idToken = null; email = ""; perms = NO_PERMS; trips = [];
     loaded.equipment = loaded.meals = false; equipment = []; recipes = [];
     $("equipment").textContent = ""; $("equipment-status").textContent = "";
+    showStale(false); $("outbox").hidden = true;
     $("app").hidden = true; $("signout").hidden = true; $("signin").hidden = false; $("user").textContent = "";
   }
+
+  // Every receipt, payment and reimbursement is written to the outbox first and then sent, so it
+  // survives losing signal or closing the page. The clientId makes a repeat harmless: the server
+  // ignores an ID it already has. Resolves { queued: true } when it could not be sent yet.
+  async function submitRecord(kind, tripId, values, photo) {
+    const payload = { kind, tripId, values, photo, clientId: O.uuid(), enteredAt: new Date().toISOString() };
+    let item;
+    try {
+      item = await O.outbox.add({ id: payload.clientId, email, kind: "hubSubmit", payload, createdAt: payload.enteredAt });
+    } catch (e) {
+      await api("hubSubmit", payload); // no offline storage in this browser: send straight away
+      return {};
+    }
+    renderOutbox();
+    const r = await sendItem(item);
+    if (r.ok) { await O.outbox.remove(item.id); renderOutbox(); return {}; }
+    if (r.retry) { renderOutbox(); return { queued: true, signin: r.signin }; }
+    await O.outbox.remove(item.id); // refused: the person fixes the form and tries again
+    renderOutbox();
+    throw new Error(r.message);
+  }
+  async function sendItem(item) {
+    try { await api("hubSubmit", item.payload, 45000); return { ok: true }; }
+    catch (e) {
+      if (e.network || e.retry || e.code === "signin") return { ok: false, retry: true, signin: e.code === "signin", message: e.message };
+      return { ok: false, message: e.message };
+    }
+  }
+  async function flushOutbox() {
+    if (!email || !idToken || navigator.onLine === false) { renderOutbox(); return; }
+    let r;
+    try { r = await O.flush(email, sendItem, renderOutbox); } catch (e) { return; }
+    if (r.sent) msg("Sent " + r.sent + " saved item" + (r.sent === 1 ? "" : "s") + ".");
+  }
+  function describeItem(item) {
+    const p = item.payload || {};
+    const trip = trips.find((t) => t.tripId === p.tripId);
+    const vals = Object.values(p.values || {}).map(String).filter(Boolean).slice(0, 2).join(", ");
+    return (KIND_LABEL[p.kind] || p.kind) + (trip ? " for " + trip.tripTitle : "") + (vals ? " (" + vals + ")" : "");
+  }
+  async function renderOutbox() {
+    let items = [];
+    try { items = email ? await O.outbox.list(email) : []; } catch (e) { /* no offline storage */ }
+    $("outbox").hidden = !items.length;
+    if (!items.length) return;
+    const pending = items.filter((i) => i.status === "pending").length;
+    $("outbox-summary").textContent = pending
+      ? pending + " saved item" + (pending === 1 ? " is" : "s are") + " waiting to be sent" + (navigator.onLine === false ? " (you're offline)." : ".")
+      : "";
+    $("outbox-send").hidden = !pending;
+    const ul = $("outbox-list"); ul.textContent = "";
+    items.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = (item.status === "failed" ? "Not accepted: " : "Waiting: ") + describeItem(item) + (item.status === "failed" ? " \u2014 " + item.error : "");
+      const button = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; li.append(" ", b); };
+      if (item.status === "failed") button("Try again", async () => { await O.outbox.retry(item.id); flushOutbox(); });
+      button("Remove", async () => {
+        if (item.status === "pending" && !confirm("Delete this saved item without sending it?")) return;
+        await O.outbox.remove(item.id); renderOutbox();
+      });
+      ul.appendChild(li);
+    });
+  }
+  $("outbox-send").onclick = flushOutbox;
+  window.addEventListener("online", flushOutbox);
+  window.addEventListener("offline", renderOutbox);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") flushOutbox(); });
+
   async function showApp() {
     $("signin").hidden = true; $("signout").hidden = false; $("app").hidden = false;
     $("user").textContent = email;
@@ -227,7 +331,13 @@
       ev.preventDefault();
       const submit = f.querySelector("button[value=ok]");
       submit.disabled = true;
-      try { await onSubmit(Object.fromEntries(new FormData(f))); d.close(); msg("Submitted. Thank you!"); }
+      try {
+        const r = await onSubmit(Object.fromEntries(new FormData(f)));
+        d.close();
+        msg(r && r.queued
+          ? (r.signin ? "Saved on this device. Sign in again and it will be sent." : "Saved on this device. It will be sent when you have a connection.")
+          : "Submitted. Thank you!");
+      }
       catch (e) { msg(e.message, true); }
       finally { submit.disabled = false; }
     };
@@ -245,7 +355,7 @@
       async (v) => {
         const { photo, ...values } = v;
         const data = await photoToBase64(photo);
-        await submitRecord("receipt", t.tripId, values, data ? { data } : null);
+        return submitRecord("receipt", t.tripId, values, data ? { data } : null);
       });
   }
 
@@ -276,5 +386,5 @@
   $("clear-meals").onclick = () => { meals = []; renderMeals(); };
 
   TroopAuth.start({ buttonId: "signin", onSignIn, onSignOut });
-  $("signout").onclick = TroopAuth.signOut;
+  $("signout").onclick = TroopAuth.userSignOut;
 })();
