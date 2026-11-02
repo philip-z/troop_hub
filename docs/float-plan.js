@@ -11,7 +11,10 @@
     });
     if (!res.ok) throw new Error("Server error " + res.status);
     const d = await res.json();
-    if (d.status === "error" || d.error) throw new Error(d.message || d.error);
+    if (d.status === "error" || d.error) {
+      if (d.code === "signin") TroopAuth.signOut();
+      throw new Error(d.message || d.error);
+    }
     return d;
   }
 
@@ -41,17 +44,19 @@
 
     // 2. Fetch responses in a single API call
     try {
-      const res = await api("floatPlanGetResponses", { tripId: TRIP_ID });
+      const res = await api("hubFloatPlan", { tripId: TRIP_ID });
       currentTripResponses = res.responses || [];
       renderFloatPlanData(currentTripResponses);
       loadGearChecklist();
       $("floatPlanContent").hidden = false;
     } catch (err) {
       console.error("Error loading responses:", err);
-      renderFloatPlanData([]);
-      loadGearChecklist();
-      $("floatPlanContent").hidden = false;
+      // Say why (e.g. not a leader who manages trips) instead of showing an empty roster as if it were real.
+      $("floatPlanError").textContent = "Could not load the roster: " + err.message;
+      $("floatPlanError").hidden = false;
+      return;
     }
+    $("floatPlanError").hidden = true;
   }
 
   function onSignOut() {

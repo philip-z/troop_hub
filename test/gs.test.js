@@ -425,6 +425,40 @@ test("slip submission: flags come from SLIP_KINDS and no profile is saved from i
   assert.strictEqual(ss.sheets["Adult Profiles"], undefined);
 });
 
+test("tripResponsesFrom_: one trip, latest slip per person, no signature columns", () => {
+  const { ctx } = makeHub();
+  const grid = [
+    ["Timestamp", "Form Type", "Youth Name", "Adult Name", "Parent Signature", "Adult Signature", "Medical Notes", "tripId", "_note"],
+    ["t1", "Youth", "Sam Scout", "", "Mom", "", "old", "20261101", "x"],
+    ["t2", "Adult", "", "Al Adult", "", "Al", "", "20261101", "x"],
+    ["t3", "Youth", "Other Trip Kid", "", "Mom", "", "", "20261102", "x"],
+    ["t4", "Youth", "  sam  scout", "", "Mom", "", "new", "20261101", "x"]
+  ];
+  const out = plain(ctx.tripResponsesFrom_(grid, "20261101"));
+  assert.deepStrictEqual(out.map((r) => r.Timestamp), ["t2", "t4"]);
+  assert.strictEqual(out[1]["Medical Notes"], "new");
+  out.forEach((r) => {
+    assert.ok(!("Parent Signature" in r) && !("Adult Signature" in r) && !("_note" in r));
+  });
+  assert.deepStrictEqual(plain(ctx.tripResponsesFrom_(grid, "nope")), []);
+  assert.deepStrictEqual(plain(ctx.tripResponsesFrom_([["a"]], "1")), []);
+});
+
+test("hubFloatPlan needs the manageTrips permission", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Responses = fakeSheet([["Form Type", "Youth Name", "tripId"], ["Youth", "Sam", "20261101"]], "Responses");
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "l@x.com", emailVerified: true });
+  const ask = () => plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: false });
+  assert.strictEqual(ask().code, "not_allowed");
+  ctx.getLeaderPermissions_ = () => null;
+  assert.strictEqual(ask().code, "not_allowed");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  const ok = ask();
+  assert.strictEqual(ok.status, "success");
+  assert.deepStrictEqual(ok.responses.map((r) => r["Youth Name"]), ["Sam"]);
+});
+
 test("HUB_RECORDS entries are well-formed", () => {
   const { ctx } = makeHub();
   const perms = plain(ctx.LEADER_PERMISSIONS);

@@ -334,3 +334,49 @@ function saveProfile_(kind, writerEmail, profileData) {
   }
   return { status: 'success' };
 }
+
+// ---------------------------------------------------------------------------
+// FLOAT PLAN (float-plan.html): everyone who submitted a slip for one trip. Leaders with
+// the manageTrips permission only, because rows include emergency phones and medical
+// notes (hubFloatPlan in Hub.gs checks that). Columns are whatever the slip form submitted.
+// ---------------------------------------------------------------------------
+
+// Pure. The Responses rows for `tripId` as objects keyed by header (see tableRows_). Signature
+// columns are left out (the float plan doesn't need them), and when someone submitted more
+// than once for the trip, only their latest slip is kept, so headcounts aren't inflated.
+function tripResponsesFrom_(grid, tripId) {
+  if (!grid || grid.length < 2) return [];
+  var headers = grid[0].map(function(h) { return String(h).trim(); });
+  var idIdx = lowerIndexOf_(headers, 'tripId');
+  if (idIdx === -1) return [];
+  var keep = [];
+  headers.forEach(function(h, i) { if (h.toLowerCase().indexOf('signature') === -1) keep.push(i); });
+  var want = String(tripId === undefined || tripId === null ? '' : tripId).trim();
+  var rows = [keep.map(function(i) { return headers[i]; })];
+  grid.slice(1).forEach(function(r) {
+    if (String(r[idIdx]).trim() === want) rows.push(keep.map(function(i) { return r[i]; }));
+  });
+  var items = tableRows_(rows, 200);
+
+  var seen = {}, latest = [];
+  for (var i = items.length - 1; i >= 0; i--) {
+    var type = String(items[i][SLIP_FORM_TYPE_COLUMN] || '').toLowerCase();
+    var spec = SLIP_KINDS[type] || SLIP_KINDS.youth;
+    var name = normalizeName_(items[i][spec.nameColumn]);
+    var key = name ? (SLIP_KINDS[type] ? type : 'youth') + '|' + name : '#' + i;
+    if (seen[key]) continue;
+    seen[key] = true;
+    latest.push(items[i]);
+  }
+  return latest.reverse();
+}
+
+function tripResponses_(tripId) {
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), 'Responses', false);
+  } catch (e) {
+    return [];
+  }
+  return tripResponsesFrom_(sheetGrid_(sheet), tripId);
+}

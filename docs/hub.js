@@ -1,7 +1,7 @@
 (function () {
   const C = window.TROOP_CONFIG, L = window.TroopLib;
   const $ = (id) => document.getElementById(id);
-  const NO_PERMS = { addTrips: false, recordPayments: false, recordReimbursements: false };
+  const NO_PERMS = { manageTrips: false, recordReimbursements: false };
   let idToken = null, email = "", perms = NO_PERMS, trips = [], meals = [];
 
   function msg(t, err) { const m = $("msg"); m.textContent = t || ""; m.style.color = err ? "#b00020" : "#1b5e20"; }
@@ -58,8 +58,8 @@
   async function showApp() {
     $("signin").hidden = true; $("signout").hidden = false; $("app").hidden = false;
     $("user").textContent = email;
-    $("add-trip").hidden = !perms.addTrips;
-    if (perms.addTrips) {
+    $("add-trip").hidden = !perms.manageTrips;
+    if (perms.manageTrips) {
       const addTripP = $("add-trip");
       if (!addTripP.querySelector("button")) {
         addTripP.textContent = "";
@@ -188,9 +188,9 @@
       if (t.acceptingResponses) {
         navButton("Permission slip", "slip.html?trip=" + encodeURIComponent(t.tripId));
       }
-      navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.tripId));
+      if (perms.manageTrips) navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.tripId));
       if (t.acceptingReceipts) button("Submit receipt", () => openReceipt(t));
-      if (perms.recordPayments) button("Record payment", () => openPayment(t));
+      if (perms.manageTrips) button("Record payment", () => openPayment(t));
       if (perms.recordReimbursements) button("Record reimbursement", () => openReimbursement(t));
       ul.appendChild(li);
     });

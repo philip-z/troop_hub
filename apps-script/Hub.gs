@@ -49,7 +49,7 @@ var HUB_RECORDS = {
   receipt:       { tab: 'Receipts', permission: '', byColumn: 'Submitted By',
                    tripFlag: 'acceptingReceipts', closedMessage: 'This trip is not accepting receipts.',
                    photoColumn: 'Receipt URL' },
-  payment:       { tab: 'Payments', permission: 'recordPayments', byColumn: 'Recorded By' },
+  payment:       { tab: 'Payments', permission: 'manageTrips', byColumn: 'Recorded By' },
   reimbursement: { tab: 'Reimbursements', permission: 'recordReimbursements', byColumn: 'Recorded By' }
 };
 
@@ -81,7 +81,7 @@ function handleHub_(data) {
       if (auth.error) return auth.error;
       var session = { status: 'success', email: auth.info.email, permissions: auth.info.permissions, trips: hubListTrips_() };
       // Leaders also get the add-trip page's "copy from" list, so that page needs no call of its own.
-      if (auth.info.permissions.addTrips) session.templates = tripTemplates_();
+      if (auth.info.permissions.manageTrips) session.templates = tripTemplates_();
       return session;
 
     case 'hubListTrips':
@@ -98,6 +98,12 @@ function handleHub_(data) {
       auth = hubAuth_(data, '');
       if (auth.error) return auth.error;
       return listRecipes_();
+
+    case 'hubFloatPlan':
+      // Everyone's emergency phone and medical notes: leaders who manage trips only.
+      auth = hubAuth_(data, 'manageTrips');
+      if (auth.error) return auth.error;
+      return { status: 'success', responses: tripResponses_(data.tripId) };
 
     case 'hubSubmit':
       var spec = HUB_RECORDS[data.kind];

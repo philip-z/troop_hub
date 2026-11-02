@@ -1,6 +1,6 @@
 // Local dev server: static files + an in-memory mock of the Apps Script web app.
 //   npm run dev                           (http://localhost:5173)
-//   LEADERS=a@x.com,b@x.com:recordPayments+recordReimbursements npm run dev   to change the leaders and their permissions
+//   LEADERS=a@x.com,b@x.com:recordReimbursements npm run dev   to change the leaders and their permissions
 // Mirrors the routes and response shapes in apps-script/*.gs, but is NOT the real
 // backend: tokens are not verified with Google, and data resets on restart.
 const http = require("node:http");
@@ -12,9 +12,9 @@ const { loadGs } = require("./gs-loader.js");
 const ROOT = path.join(__dirname, "..");
 const SITE = path.join(ROOT, "docs");
 const PORT = Number(process.env.PORT) || 5173;
-// LEADERS=email[:perm+perm],... ; no ":" means all permissions. Permissions: addTrips, recordPayments, recordReimbursements.
-const PERMS = ["addTrips", "recordPayments", "recordReimbursements"];
-const LEADERS = new Map((process.env.LEADERS || "leader@test.com,treasurer@test.com:recordPayments+recordReimbursements").split(",").map((s) => {
+// LEADERS=email[:perm+perm],... ; no ":" means all permissions. Permissions: manageTrips, recordReimbursements.
+const PERMS = ["manageTrips", "recordReimbursements"];
+const LEADERS = new Map((process.env.LEADERS || "leader@test.com,treasurer@test.com:recordReimbursements").split(",").map((s) => {
   const [email, p] = s.trim().split(":");
   return [email.toLowerCase(), p === undefined ? PERMS : p.split("+").filter((x) => PERMS.includes(x))];
 }));
@@ -127,7 +127,7 @@ function hub(data) {
         email: a.info.email,
         permissions: a.info.permissions,
         trips: db.trips.map((t) => tripSummary(t)),
-        ...(a.info.permissions.addTrips ? { templates: tripTemplates() } : {})
+        ...(a.info.permissions.manageTrips ? { templates: tripTemplates() } : {})
       };
     case "hubListTrips":
       a = auth(data, ""); if (a.error) return a.error;
@@ -138,6 +138,9 @@ function hub(data) {
     case "hubListRecipes":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", items: gs.tableRows_(grid(db.recipes)) };
+    case "hubFloatPlan":
+      a = auth(data, "manageTrips"); if (a.error) return a.error;
+      return { status: "success", responses: gs.tripResponsesFrom_(grid(db.tables.Responses), data.tripId) };
     case "hubSubmit": {
       const spec = HUB_RECORDS[data.kind];
       if (!spec) return err("invalid", "Unknown record type.");
@@ -166,7 +169,7 @@ function hub(data) {
 
 
 function listTripTemplates(data) {
-  const a = auth(data, "addTrips"); if (a.error) return a.error;
+  const a = auth(data, "manageTrips"); if (a.error) return a.error;
   return { status: "success", trips: tripTemplates() };
 }
 
@@ -177,7 +180,7 @@ function tripTemplates() {
 function addTrip(data) {
   const info = verify(data.idToken);
   if (!info) return SIGNIN_ERR;
-  if (!info.emailVerified || !permissionsFor(info.email).addTrips) return err("not_allowed", "Your account (" + info.email + ") is not allowed to add trips. Ask a leader to tick addTrips for you on the Leaders sheet.");
+  if (!info.emailVerified || !permissionsFor(info.email).manageTrips) return err("not_allowed", "Your account (" + info.email + ") is not allowed to manage trips. Ask a leader to tick manageTrips for you on the Leaders sheet.");
   const rec = gs.buildTripRecord_(data.values);
   if (rec.error) return err("invalid", rec.error);
   const tripId = gs.nextTripId_(rec.month, db.trips.map((t) => t.tripId));
