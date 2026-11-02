@@ -57,6 +57,34 @@ function hubError_(code, message) {
   return { status: 'error', code: code, message: message };
 }
 
+// { manageTrips: bool, ... } from the Leaders sheet; all false for someone who isn't listed.
+function hubPermissions_(email) {
+  var perms = getLeaderPermissions_(email);
+  var out = {};
+  LEADER_PERMISSIONS.forEach(function(p) { out[p] = !!(perms && perms[p]); });
+  return out;
+}
+
+// What a page needs to start with, in one response: the person's permissions and the trip list
+// (each trip with its slip config), plus the add-trip templates for people who manage trips.
+// Sign-in responses carry this too (see Auth.gs), so signing in and opening the hub is one call.
+function hubSessionFor_(email, permissions) {
+  var session = { status: 'success', email: email, permissions: permissions, trips: hubListTrips_() };
+  if (permissions.manageTrips) session.templates = tripTemplates_();
+  return session;
+}
+
+// Same, for a verified email, or null if anything goes wrong: a sign-in must never fail because
+// the sheets were slow or unavailable (the page then asks for the session itself).
+function hubSessionOrNull_(email) {
+  try {
+    return hubSessionFor_(email, hubPermissions_(email));
+  } catch (e) {
+    console.error('Session bundle failed: ' + e);
+    return null;
+  }
+}
+
 // Returns { info } for a signed-in user (info.permissions = their Leaders-sheet
 // permissions, all false for non-leaders), or { error } to return to the client.
 function hubAuth_(data, permission) {
@@ -64,13 +92,22 @@ function hubAuth_(data, permission) {
   if (!info || !info.emailVerified) {
     return { error: hubError_('signin', 'Your sign-in has expired or is invalid. Please sign in again.') };
   }
-  var perms = getLeaderPermissions_(info.email);
-  info.permissions = {};
-  LEADER_PERMISSIONS.forEach(function(p) { info.permissions[p] = !!(perms && perms[p]); });
+  info.permissions = hubPermissions_(info.email);
   if (permission && !info.permissions[permission]) {
     return { error: hubError_('not_allowed', 'Your account (' + info.email + ') is not allowed to do that. Ask a leader to tick ' + permission + ' for you on the Leaders sheet.') };
   }
   return { info: info };
+}
+
+// An optional list (equipment, recipes) riding along with another answer: if its spreadsheet can't
+// be opened it becomes an error entry of its own and must not break the main answer.
+function hubOptionalList_(read) {
+  try {
+    return read();
+  } catch (e) {
+    console.error('List failed: ' + e);
+    return hubError_('error', 'That list could not be read right now.');
+  }
 }
 
 function handleHub_(data) {
@@ -79,10 +116,7 @@ function handleHub_(data) {
     case 'hubSession':
       auth = hubAuth_(data, '');
       if (auth.error) return auth.error;
-      var session = { status: 'success', email: auth.info.email, permissions: auth.info.permissions, trips: hubListTrips_() };
-      // Leaders also get the add-trip page's "copy from" list, so that page needs no call of its own.
-      if (auth.info.permissions.manageTrips) session.templates = tripTemplates_();
-      return session;
+      return hubSessionFor_(auth.info.email, auth.info.permissions);
 
     case 'hubListTrips':
       auth = hubAuth_(data, '');
@@ -99,11 +133,18 @@ function handleHub_(data) {
       if (auth.error) return auth.error;
       return listRecipes_();
 
+    case 'hubLists':
+      // Equipment and recipes together, so the hub can fetch both in one background call.
+      auth = hubAuth_(data, '');
+      if (auth.error) return auth.error;
+      return { status: 'success', equipment: hubOptionalList_(listEquipment_), recipes: hubOptionalList_(listRecipes_) };
+
     case 'hubFloatPlan':
       // Everyone's emergency phone and medical notes: leaders who manage trips only.
+      // The gear checklist's equipment list comes along, so the page needs one call, not two.
       auth = hubAuth_(data, 'manageTrips');
       if (auth.error) return auth.error;
-      return { status: 'success', responses: tripResponses_(data.tripId) };
+      return { status: 'success', responses: tripResponses_(data.tripId), equipment: hubOptionalList_(listEquipment_) };
 
     case 'hubSubmit':
       var spec = HUB_RECORDS[data.kind];

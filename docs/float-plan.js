@@ -57,7 +57,7 @@
       TroopOffline.cacheSet(userEmail, "roster:" + TRIP_ID, currentTripResponses);
       $("floatPlanOffline").hidden = true;
       renderFloatPlanData(currentTripResponses);
-      loadGearChecklist();
+      loadGearChecklist(res.equipment && res.equipment.status === "success" ? res.equipment.items : null);
       $("floatPlanContent").hidden = false;
     } catch (err) {
       console.error("Error loading responses:", err);
@@ -205,24 +205,14 @@
 
   let troopGearList = [];
 
-  async function loadGearChecklist() {
-    try {
-      const cached = sessionStorage.getItem('troop58_equipment');
-      if (cached) {
-        troopGearList = JSON.parse(cached);
-        renderGearChecklist();
-        return;
-      }
-      const res = await api("hubListEquipment");
-      if (res && Array.isArray(res.items) && res.items.length > 0) {
-        troopGearList = res.items.map(i => ({ name: i.item, qty: i.quantity || '', checked: false })).filter(i => i.name);
-        sessionStorage.setItem('troop58_equipment', JSON.stringify(troopGearList));
-      } else {
-        troopGearList = [];
-      }
-    } catch (e) {
-      console.log("Could not load equipment list.");
-      troopGearList = [];
+  // The equipment list arrives with the roster (items), or is the copy this device saved last time.
+  function loadGearChecklist(items) {
+    if (Array.isArray(items)) {
+      troopGearList = items.map(i => ({ name: i.item, qty: i.quantity || '', checked: false })).filter(i => i.name);
+      TroopOffline.cacheSet(userEmail, 'gear', troopGearList);
+    } else {
+      const saved = TroopOffline.cacheGet(userEmail, 'gear');
+      troopGearList = saved ? saved.data : [];
     }
     renderGearChecklist();
   }

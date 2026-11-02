@@ -152,7 +152,8 @@ function authVerifyCode_(data) {
     lock.releaseLock();
   }
   logEvent_('authVerifyCode', 'ok');
-  return { status: 'success', token: issueSessionToken_(email, data.remember === true ? REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS) };
+  // The session rides along so the page doesn't need a second call (and a second cold start) to open.
+  return { status: 'success', token: issueSessionToken_(email, data.remember === true ? REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS), session: hubSessionOrNull_(email) };
 }
 
 // "Remember me" for Google sign-in: swaps a live Google ID token for a 30-day session token.
@@ -161,5 +162,5 @@ function authExchange_(data) {
   if (isSessionToken_(data.idToken)) return { status: 'error', code: 'signin', message: 'Please sign in with Google.' };
   var info = verifyGoogleTokenInfo_(data.idToken);
   if (!info || !info.emailVerified || !info.email) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
-  return { status: 'success', token: issueSessionToken_(info.email, REMEMBER_TTL_SECONDS, info.sub, info.name) };
+  return { status: 'success', token: issueSessionToken_(info.email, REMEMBER_TTL_SECONDS, info.sub, info.name), session: hubSessionOrNull_(info.email) };
 }

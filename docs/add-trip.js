@@ -73,10 +73,16 @@ function loadTemplates(forceRefresh) {
     .catch(err => console.error(err));
 }
 
-// A new trip makes the hub's saved session (trips list and templates) out of date; marking it
-// stale makes the hub refresh it next time it opens (the old copy still works offline until then).
-function invalidateHubCache() {
-  TroopOffline.cacheStale(leaderEmail, 'session');
+// A new trip makes the hub's saved session (trips list and templates) out of date. The server sends
+// the refreshed lists back with the new trip's ID, so the saved session is updated in place (no extra
+// call). If they didn't come back, it is marked stale so the hub refreshes it next time it opens.
+function updateSavedSession(r) {
+  const saved = TroopOffline.cacheGet(leaderEmail, 'session');
+  if (saved && Array.isArray(r.trips) && Array.isArray(r.templates)) {
+    TroopOffline.cacheSet(leaderEmail, 'session', Object.assign({}, saved.data, { trips: r.trips, templates: r.templates }));
+  } else {
+    TroopOffline.cacheStale(leaderEmail, 'session');
+  }
 }
 
 // Fills every named input that the template has a value for, except those marked
@@ -119,8 +125,8 @@ function submitTrip(e) {
       if (r.status === 'success') {
         setMessage('Trip added.', false);
         form.reset();
-        invalidateHubCache();
-        loadTemplates(true);
+        updateSavedSession(r);
+        if (Array.isArray(r.templates)) applyTemplates(r.templates); else loadTemplates(true);
       } else if (r.code === 'signin') {
         TroopAuth.signOut();
         setMessage(r.message + ' Your entries are still in the form.', true);

@@ -56,6 +56,22 @@ The design keeps column names out of the backend code: they come from input `nam
 2. To keep a column private, start its header with an underscore (e.g., `_supplier`).
 3. In `docs/index.html`, use `data-title`, `data-count`, `data-details` on the `#equipment` list to choose what to display; use `data-label` on the recipe dropdown and `data-recipe="<column>"` on recipe form inputs.
 
+## Keeping calls to the script few
+Every call to the Apps Script web app can wait for the script to wake up, so a page should make one call that waits, and nothing it needs should be a second one. Keep to this when adding features:
+| Page / action | Calls that wait |
+|---|---|
+| Sign in with an emailed code, or Google with "Remember me" | 1 (`authVerifyCode` / `authExchange` return the hub session along with the token) |
+| Sign in with plain Google | 1 (`hubSession`, on opening the hub) |
+| Hub, later visits | 0 (the saved session is shown at once and refreshed in the background if it is over 10 minutes old) |
+| Equipment and Meal planning tabs | 0 (`hubLists` fetches equipment and recipes together in the background and saves them) |
+| Slip from the hub | 0 for the form (the trip is saved from the hub); the saved profiles load in the background |
+| Slip from a direct link | 1 (`slipLoad`: trip and profiles) |
+| Submit a slip | 1 (the profile marked `data-profile` travels in the same request) |
+| Add a trip | 1 (the refreshed trip list and templates come back with it) |
+| Float plan | 1 (`hubFloatPlan` returns the roster and the equipment list) |
+| Receipt, payment or reimbursement | 1 (and it is saved on the device first, see below) |
+A bundled extra (like the session on sign-in, or the lists on add-trip) must never make the main action fail: the server catches its errors and the page falls back to asking for it separately.
+
 ## Working offline
 The aim is that a leader can open the hub and record receipts, payments and reimbursements with no signal, and that what was entered reaches the sheet once there is signal again.
 - **Pages:** `sw.js` (a service worker) saves the site's own files. It asks the network first, so an online visit always gets the latest deploy, and uses the saved copy when offline or when the network is slow. It never touches requests to the Apps Script web app or to Google.

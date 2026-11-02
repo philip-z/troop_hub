@@ -65,6 +65,16 @@ function handlePermissionPost_(raw, data) {
     return jsonOut_(saved);
   }
 
+  // The slip page's start-up in one call: the trip (when it isn't already saved from the hub)
+  // and this person's saved profiles. The trip part is the same answer slipTrip gives.
+  if (data.action === 'slipLoad') {
+    var loader = profileUser_(data.idToken);
+    if (!loader) return jsonOut_({ status: 'error', code: 'signin', message: 'Please sign in to view this trip.' });
+    var loaded = { status: 'success', profiles: getUserProfiles_(loader.email) };
+    if (data.tripId) loaded.trip = permissionTripConfig_(data.tripId);
+    return jsonOut_(loaded);
+  }
+
   if (data.action === 'slipTrip') {
     if (!verifyGoogleToken_(data.idToken)) return jsonOut_({ status: 'error', code: 'signin', message: 'Please sign in to view this trip.' });
     return jsonOut_(permissionTripConfig_(data.tripId));
@@ -77,11 +87,13 @@ function handlePermissionPost_(raw, data) {
   // Soft anti-spam: trim and flag, never reject.
   var flags = [];
   var submittedTripRevision = data._tripRevision;
+  var submittedIdToken = data._idToken;
   if (raw.length > MAX_PAYLOAD_CHARS) flags.push('Oversized payload');
   var honeypotFilled = !!(data[HONEYPOT_FIELD] && String(data[HONEYPOT_FIELD]).trim() !== '');
   if (honeypotFilled) flags.push('Honeypot filled');
 
   var slipSnapshot = data._slipSnapshot; // read before sanitizeFields_ drops '_' keys
+  var profileSubmit = data._profile;     // { kind, data }: the inputs marked data-profile, see below
   var submittedTripId = data._tripId;
   data = sanitizeFields_(data, flags);
 
@@ -125,8 +137,22 @@ function handlePermissionPost_(raw, data) {
 
   sheet.appendRow(rowData);
 
-  // Saved profiles are not derived from the submission: slip.js sends the inputs marked
-  // data-profile in a separate saveProfile call, so a one-off question never lands in one.
+  // The signed-in person's profile is saved in this same call, so a submit is one round trip.
+  // It is not derived from the response: slip.js sends exactly the inputs marked data-profile in
+  // _profile, so a one-off question never lands in a profile. It never blocks the submission.
+  if (profileSubmit && typeof profileSubmit === 'object' && !honeypotFilled) {
+    try {
+      var profileWriter = profileUser_(submittedIdToken);
+      if (profileWriter) {
+        var profileResult = saveProfile_(profileSubmit.kind, profileWriter.email, profileSubmit.data);
+        logEvent_('profile ' + (profileResult.status === 'success' ? 'saved' : 'rejected'), profileSubmit.kind + (profileResult.message ? ' ' + profileResult.message : ''));
+      }
+    } catch (profErr) {
+      console.error('Profile save failed: ' + profErr);
+      logEvent_('profile save FAILED', profErr + '');
+    }
+  }
+
   return jsonOut_({ status: "success" });
 }
 

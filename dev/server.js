@@ -93,7 +93,7 @@ function authVerifyCode(data) {
   if (String(data.code || "").replace(/\s+/g, "") !== MOCK_CODE || !email) return err("bad_code", "That code is wrong or has expired. Request a new one.");
   const ttl = data.remember === true ? 30 * 86400 : 7200;
   const payload = Buffer.from(JSON.stringify({ email, exp: Math.floor(Date.now() / 1000) + ttl })).toString("base64url");
-  return { status: "success", token: "ts1." + payload + ".mock" };
+  return { status: "success", token: "ts1." + payload + ".mock", session: sessionFor(email) };
 }
 function authExchange(data) {
   if (String(data.idToken).startsWith("ts1.")) return err("signin", "Please sign in with Google.");
@@ -101,8 +101,12 @@ function authExchange(data) {
   if (!info || !info.emailVerified) return SIGNIN_ERR;
   const c = JSON.parse(Buffer.from(String(data.idToken).split(".")[1], "base64url").toString());
   const payload = Buffer.from(JSON.stringify({ email: info.email, sub: info.sub, name: c.name, exp: Math.floor(Date.now() / 1000) + 30 * 86400 })).toString("base64url");
-  return { status: "success", token: "ts1." + payload + ".mock" };
+  return { status: "success", token: "ts1." + payload + ".mock", session: sessionFor(info.email) };
 }
+const sessionFor = (email) => {
+  const permissions = permissionsFor(email);
+  return { status: "success", email, permissions, trips: db.trips.map((t) => tripSummary(t)), ...(permissions.manageTrips ? { templates: tripTemplates() } : {}) };
+};
 const permissionsFor = (email) => Object.fromEntries(PERMS.map((p) => [p, (LEADERS.get(email) || []).includes(p)]));
 const SIGNIN_ERR = err("signin", "Your sign-in has expired or is invalid. Please sign in again.");
 
@@ -122,13 +126,7 @@ function hub(data) {
   switch (data.action) {
     case "hubSession":
       a = auth(data, ""); if (a.error) return a.error;
-      return {
-        status: "success",
-        email: a.info.email,
-        permissions: a.info.permissions,
-        trips: db.trips.map((t) => tripSummary(t)),
-        ...(a.info.permissions.manageTrips ? { templates: tripTemplates() } : {})
-      };
+      return sessionFor(a.info.email);
     case "hubListTrips":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", trips: db.trips.map((t) => tripSummary(t)) };
@@ -138,9 +136,12 @@ function hub(data) {
     case "hubListRecipes":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", items: gs.tableRows_(grid(db.recipes)) };
+    case "hubLists":
+      a = auth(data, ""); if (a.error) return a.error;
+      return { status: "success", equipment: { status: "success", items: gs.tableRows_(grid(db.equipment)) }, recipes: { status: "success", items: gs.tableRows_(grid(db.recipes)) } };
     case "hubFloatPlan":
       a = auth(data, "manageTrips"); if (a.error) return a.error;
-      return { status: "success", responses: gs.tripResponsesFrom_(grid(db.tables.Responses), data.tripId) };
+      return { status: "success", responses: gs.tripResponsesFrom_(grid(db.tables.Responses), data.tripId), equipment: { status: "success", items: gs.tableRows_(grid(db.equipment)) } };
     case "hubSubmit": {
       const spec = HUB_RECORDS[data.kind];
       if (!spec) return err("invalid", "Unknown record type.");
@@ -189,7 +190,8 @@ function addTrip(data) {
   if (!tripId) return err("invalid", "That month already has 99 trips.");
   db.trips.push(Object.assign({ tripId }, rec.fields, rec.after));
   db.tables["Trip Log"].push([new Date().toISOString(), info.email, rec.fields.tripTitle || "", rec.fields.tripDates || ""]);
-  return { status: "success", tripId };
+  // The refreshed lists come back with the new trip (see addTrip_ in Leaders.gs).
+  return { status: "success", tripId, trips: db.trips.map((t) => tripSummary(t)), templates: tripTemplates() };
 }
 
 // Saved profiles: the real planning (who may update which row, what the columns are) from
@@ -222,6 +224,16 @@ function slipPost(data) {
     if (!info || !info.emailVerified || !info.email) return { status: "error", message: "unauthorized" };
     return saveProfile(data.kind, info.email, data.profileData);
   }
+  if (data.action === "slipLoad") {
+    const info = verify(data.idToken);
+    if (!info || !info.emailVerified || !info.email) return err("signin", "Please sign in to view this trip.");
+    const out = { status: "success", profiles: profilesFor(info.email) };
+    if (data.tripId) {
+      const t = tripConfig(data.tripId);
+      out.trip = !t ? err("not_found", "Trip not found.") : truthy(t.acceptingResponses) ? t : err("closed", "This trip is not accepting permission slips.");
+    }
+    return out;
+  }
   if (data.action === "slipTrip") {
     if (!verify(data.idToken)) return err("signin", "Please sign in to view this trip.");
     const t = tripConfig(data.tripId);
@@ -238,6 +250,9 @@ function slipPost(data) {
   Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
   row.tripId = trip.tripId;
   db.tables.Responses.push(row);
+  // The profile is saved in the same call (never blocking the slip), like handlePermissionPost_.
+  const info = data._profile && typeof data._profile === "object" && !data.website_url ? verify(data._idToken) : null;
+  if (info && info.emailVerified && info.email) saveProfile(data._profile.kind, info.email, data._profile.data);
   return { status: "success" };
 }
 

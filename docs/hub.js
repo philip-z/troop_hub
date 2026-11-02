@@ -86,8 +86,8 @@
   // data and the outbox must stay; deleting them is the sign-out button's job (TroopAuth.userSignOut).
   function onSignOut() {
     idToken = null; email = ""; perms = NO_PERMS; trips = [];
-    loaded.equipment = loaded.meals = false; equipment = []; recipes = [];
-    $("equipment").textContent = ""; $("equipment-status").textContent = "";
+    listsReady = listsLoading = false; equipment = []; recipes = []; equipmentError = "";
+    $("equipment").textContent = ""; $("equipment-status").textContent = ""; renderRecipePicker();
     showStale(false); $("outbox").hidden = true;
     $("app").hidden = true; $("signout").hidden = true; $("signin").hidden = false; $("user").textContent = "";
   }
@@ -182,6 +182,7 @@
       eqBtn.onclick = () => { window.open(C.EQUIPMENT_FORM_URL, "_blank"); };
       p.append(eqBtn);
     }
+    prepareLists();
     selectTab(location.hash.slice(1), false);
     if (!trips.length) {
       await loadTrips();
@@ -213,18 +214,44 @@
   });
   window.addEventListener("hashchange", () => { if (!$("app").hidden) selectTab(location.hash.slice(1), false); });
 
-  // Equipment and recipes live in their own spreadsheets; each is fetched the first time its tab opens.
-  const loaded = { equipment: false, meals: false };
-  let equipment = [], recipes = [];
-  function ensureLoaded(name) {
-    if (name === "equipment" && !loaded.equipment) loadEquipment();
-    if (name === "meals" && !loaded.meals) loadRecipes();
+  // Equipment and recipes live in their own spreadsheets. One background call (hubLists) fetches both
+  // once the hub is open, and the answer is saved on the device, so the tabs open straight away and
+  // work offline. A tab opened before the answer arrives shows "Loading..." and fills in when it does.
+  const LISTS_FRESH_MS = 10 * 60 * 1000;
+  let equipment = [], recipes = [], equipmentError = "", listsReady = false, listsLoading = false;
+
+  function applyLists(data) {
+    const items = (list) => (list && list.status === "success" ? list.items : null);
+    equipment = items(data.equipment) || [];
+    equipmentError = items(data.equipment) ? "" : "Could not load equipment: " + ((data.equipment && data.equipment.message) || "try again later.");
+    recipes = items(data.recipes) || [];
+    listsReady = true;
+    renderEquipment();
+    renderRecipePicker();
   }
-  async function loadEquipment() {
-    loaded.equipment = true;
-    $("equipment-status").textContent = "Loading...";
-    try { equipment = (await api("hubListEquipment")).items; renderEquipment(); }
-    catch (e) { loaded.equipment = false; $("equipment-status").textContent = "Could not load equipment: " + e.message; }
+  async function loadLists() {
+    if (listsLoading) return;
+    listsLoading = true;
+    const who = email;
+    try {
+      const res = await api("hubLists");
+      if (who !== email) return;
+      O.cacheSet(email, "lists", res);
+      applyLists(res);
+    } catch (e) {
+      if (!listsReady) { equipmentError = "Could not load equipment: " + e.message; renderEquipment(); }
+    } finally { listsLoading = false; }
+  }
+  // Called whenever the hub is shown: use the saved copy at once, and refresh it in the background if it is old.
+  function prepareLists() {
+    const saved = O.cacheGet(email, "lists");
+    if (saved) applyLists(saved.data);
+    if (!saved || Date.now() - saved.at > LISTS_FRESH_MS) loadLists();
+  }
+  function ensureLoaded(name) {
+    if (listsReady || (name !== "equipment" && name !== "meals")) return;
+    if (name === "equipment") $("equipment-status").textContent = "Loading...";
+    if (!listsLoading) loadLists();
   }
   // Which sheet columns make up an item comes from data-* on #equipment in index.html.
   function renderEquipment() {
@@ -233,7 +260,7 @@
     const shownCols = [cols.title, cols.count, ...details].filter(Boolean);
     const q = $("equipment-filter").value.trim().toLowerCase();
     const shown = equipment.filter((i) => !q || shownCols.map((c) => i[c] || "").join(" ").toLowerCase().includes(q));
-    $("equipment-status").textContent = shown.length ? "" : (equipment.length ? "No equipment matches." : "No equipment listed yet.");
+    $("equipment-status").textContent = equipmentError || (shown.length ? "" : (equipment.length ? "No equipment matches." : "No equipment listed yet."));
     const ul = $("equipment"); ul.textContent = "";
     shown.forEach((i) => {
       const li = document.createElement("li");
@@ -245,14 +272,10 @@
   }
   $("equipment-filter").oninput = renderEquipment;
 
-  async function loadRecipes() {
-    loaded.meals = true;
-    try {
-      recipes = (await api("hubListRecipes")).items;
-      const sel = $("recipe-pick"); sel.length = 1;
-      recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r[sel.dataset.label] || ""; sel.appendChild(o); });
-      $("recipe-pick-row").hidden = !recipes.length;
-    } catch (e) { loaded.meals = false; $("recipe-pick-row").hidden = true; }
+  function renderRecipePicker() {
+    const sel = $("recipe-pick"); sel.length = 1;
+    recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r[sel.dataset.label] || ""; sel.appendChild(o); });
+    $("recipe-pick-row").hidden = !recipes.length;
   }
   $("recipe-pick").onchange = (ev) => {
     const r = recipes[Number(ev.target.value)];

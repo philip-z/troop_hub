@@ -240,5 +240,14 @@ function addTrip_(data) {
   } finally {
     lock.releaseLock();
   }
-  return { status: 'success', tripId: tripId };
+  // The page's refreshed trip list and templates come back too (see hubSessionFor_), so adding a
+  // trip doesn't cost a second call. The trip is saved by now, so this must never turn into an error.
+  var result = { status: 'success', tripId: tripId };
+  try {
+    result.trips = hubListTrips_();
+    result.templates = tripTemplates_();
+  } catch (e) {
+    console.error('Could not refresh trip lists after adding: ' + e);
+  }
+  return result;
 }

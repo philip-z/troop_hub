@@ -156,25 +156,34 @@ function cachedTripDetails() {
   } catch (e) { return null; }
 }
 
-function loadTripDetails() {
-  if (!TRIP_ID) { showTripUnavailable('No trip selected. Open this form from the trip list.'); return; }
+// Everything the page needs to start, in as few calls as possible. Arriving from the hub, the trip is
+// already saved on this device, so only the saved profiles are fetched. From a direct link, one call
+// (slipLoad) brings back the trip and the profiles together.
+function loadSlipData(googleUserId) {
+  if (!TRIP_ID) {
+    showTripUnavailable('No trip selected. Open this form from the trip list.');
+    loadUserProfile(googleUserId);
+    return;
+  }
 
   const cached = cachedTripDetails();
-  if (cached) { applyTripDetails(cached); return; }
+  if (cached) { applyTripDetails(cached); loadUserProfile(googleUserId); return; }
 
+  useSavedProfiles();
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    body: JSON.stringify({ action: 'slipTrip', tripId: TRIP_ID, idToken: window.currentIdToken })
+    body: JSON.stringify({ action: 'slipLoad', tripId: TRIP_ID, idToken: window.currentIdToken })
   })
     .then(res => res.json())
     .then(data => {
       if (data.code === 'signin') { TroopAuth.signOut(); return; }
       if (data.status === 'error') { showTripUnavailable(data.message || 'This trip is unavailable.'); return; }
-      applyTripDetails(data);
+      if (data.trip && data.trip.status === 'error') showTripUnavailable(data.trip.message || 'This trip is unavailable.');
+      else if (data.trip) applyTripDetails(data.trip);
+      if (data.profiles) applyServerProfiles(data.profiles);
     })
     .catch(err => console.error("Error loading trip data:", err));
 }
-
 
 // ---------------------------------------------------------------------------
 // 5. Form state (youth/adult toggle, drafts)
@@ -344,6 +353,9 @@ function handleFormSubmit(e) {
   payload._tripRevision = window.currentTripId || '';
   payload._slipSnapshot = buildSlipSnapshot(form);
   if (window.currentIdToken) payload._idToken = window.currentIdToken;
+  // The inputs marked data-profile travel with the slip, so the server saves them in the same call.
+  const profile = window.currentIdToken ? collectProfile() : null;
+  if (profile) payload._profile = { kind: profile.kind, data: profile.profileData };
 
   const submitBtn = form.querySelector('button[type="submit"]');
   if (submitBtn) submitBtn.disabled = true;
@@ -358,7 +370,7 @@ function handleFormSubmit(e) {
     setSubmitting(false); // clear before alert(), which blocks the page
     if (response.status === 'success') {
       alert("Permission slip submitted successfully! Thank you.");
-      if (window.currentIdToken) saveUserProfile();
+      if (profile) rememberProfileLocally(profile);
       localStorage.removeItem(DRAFT_KEY);
       form.reset();
       toggleFormType();
@@ -470,7 +482,6 @@ function handleCredentialResponse(response) {
   window.currentUserGoogleId = responsePayload.sub;
   window.currentEmail = String(responsePayload.email || '').toLowerCase();
   setSignedInUI(responsePayload.email || responsePayload.name);
-  loadTripDetails();
 
   const pName = document.getElementById('parentName');
   const pEmail = document.getElementById('parentEmail');
@@ -487,7 +498,7 @@ function handleCredentialResponse(response) {
     adultEmails.value = responsePayload.email;
   }
 
-  loadUserProfile(responsePayload.sub);
+  loadSlipData(responsePayload.sub);
 
   document.querySelectorAll('#permissionForm input[name*="signature" i]').forEach(el => {
     el.value = '';
@@ -598,59 +609,59 @@ function autofillActiveProfile() {
   if (key && first && !key.value.trim()) fillProfile(kind, first);
 }
 
-// Shows the copy kept on this device straight away, then replaces it with the server's.
+// Shows the copy kept on this device straight away.
+function useSavedProfiles() {
+  let cached = {};
+  try { cached = JSON.parse(localStorage.getItem(profilesCacheKey())) || {}; } catch (e) {}
+  setUserProfiles(cached);
+}
+
+// Replaces what is shown (and the copy on this device) with the server's profiles.
+function applyServerProfiles(profiles) {
+  setUserProfiles(profiles);
+  localStorage.setItem(profilesCacheKey(), JSON.stringify(window.userProfiles));
+  autofillActiveProfile();
+}
+
 function loadUserProfile(googleUserId) {
   if (!googleUserId) return;
-  const cacheKey = profilesCacheKey();
-  let cached = {};
-  try { cached = JSON.parse(localStorage.getItem(cacheKey)) || {}; } catch (e) {}
-  setUserProfiles(cached);
+  useSavedProfiles();
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({ action: 'getProfile', idToken: window.currentIdToken })
   })
     .then(res => res.json())
-    .then(r => {
-      if (!r || r.error || !r.profiles) return;
-      setUserProfiles(r.profiles);
-      localStorage.setItem(cacheKey, JSON.stringify(window.userProfiles));
-      autofillActiveProfile();
-    })
+    .then(r => { if (r && !r.error && r.profiles) applyServerProfiles(r.profiles); })
     .catch(err => console.log('Profile fetch error:', err));
 }
 
-// Saves the visible section's data-profile inputs as that person's profile, on this device
-// and on the server. (The server decides whether it updates an existing row or adds one.)
-function saveUserProfile() {
-  if (!window.currentUserGoogleId || !window.currentIdToken) return;
+// The visible section's data-profile inputs as { kind, profileData }, or null when there is no name
+// to save them under. Sent with the slip (see handleFormSubmit); the server decides whether it
+// updates an existing row or adds one.
+function collectProfile() {
   const kind = activeProfileKind();
   const section = kind && profileSection(kind);
   const key = kind && profileKeyInput(kind);
-  if (!section || !key) return;
+  if (!section || !key) return null;
 
-  const form = document.getElementById('permissionForm');
-  const formData = new FormData(form);
+  const formData = new FormData(document.getElementById('permissionForm'));
   const profileData = {};
   new Set(Array.from(section.querySelectorAll('[data-profile]')).map(el => el.name)).forEach(name => {
     const values = formData.getAll(name);
     if (values.length) profileData[name] = values.length > 1 ? values : values[0];
   });
-  const name = profileNameOf(kind, profileData);
-  if (!name) return;
+  return profileNameOf(kind, profileData) ? { kind, profileData } : null;
+}
 
+// After a successful submit, keep the saved copy on this device in step with what the server saved.
+function rememberProfileLocally(profile) {
+  const { kind, profileData } = profile;
+  const name = profileNameOf(kind, profileData);
   const list = (window.userProfiles[kind] || []).slice();
   const i = list.findIndex(p => sameName(profileNameOf(kind, p), name));
   if (i >= 0) list[i] = Object.assign({}, list[i], profileData); else list.push(profileData);
   const profiles = Object.assign({}, window.userProfiles, { [kind]: list });
   setUserProfiles(profiles);
   localStorage.setItem(profilesCacheKey(), JSON.stringify(profiles));
-
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, kind, profileData })
-  })
-    .then(res => res.json())
-    .then(r => { if (r.status !== 'success') console.error('Save profile:', r.message); })
-    .catch(err => console.error('Save profile error:', err));
 }

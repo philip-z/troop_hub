@@ -33,13 +33,21 @@ window.TroopAuth = (function () {
     (persist ? localStorage : sessionStorage).setItem(KEY, token);
   }
 
+  // The server sends the hub session (permissions, trips) along with a new token, so the page can
+  // open without another call (and another wait for the script to wake up). Saved like hub.js saves it.
+  function keepSession(token, d) {
+    try {
+      if (d && d.session && window.TroopOffline) window.TroopOffline.cacheSet(parseJwt(token).email, "session", d.session);
+    } catch (e) { /* the page just asks for it */ }
+  }
+
   // Google ID tokens last ~1 hour, so "remember me" swaps one for a 30-day token from our server.
   async function onGoogleCredential(credential) {
     let token = credential;
     if (remember.checked) {
       try {
         const d = await post({ action: "authExchange", idToken: credential });
-        if (d.status === "success") token = d.token;
+        if (d.status === "success") { token = d.token; keepSession(token, d); }
       } catch (e) { /* keep the Google token for this tab */ }
     }
     save(token, remember.checked && token !== credential);
@@ -85,6 +93,7 @@ window.TroopAuth = (function () {
         const d = await post({ action: "authVerifyCode", email: email.value, code: code.value, remember: remember.checked });
         if (d.status === "error") { say(d.message, true); return; }
         code.value = ""; say("");
+        keepSession(d.token, d);
         save(d.token, remember.checked);
         onSignInCb(d.token, parseJwt(d.token));
       } catch (e) { say(e.message, true); }

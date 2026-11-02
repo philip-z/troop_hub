@@ -46,7 +46,8 @@ function fakeSheet(rows, name) {
     getLastRow: () => rows.length,
     getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0),
     appendRow: (r) => { rows.push(r.slice()); },
-    getRange: range
+    getRange: range,
+    getDataRange: () => range(1, 1, Math.max(rows.length, 1), Math.max(rows.reduce((m, r) => Math.max(m, r.length), 0), 1))
   };
 }
 
@@ -126,9 +127,10 @@ test("appendRecord_ refuses to grow a sheet past the column cap", () => {
 function makeHub() {
   const logged = [];
   const photoCalls = [];
-  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Code.gs"], {
+  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Auth.gs", "Code.gs"], {
     logEvent_: (stage, detail) => logged.push([stage, detail]),
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) }
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    Utilities: { base64EncodeWebSafe: () => "rev", computeDigest: () => "d", DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 } }
   });
   const ss = fakeSpreadsheet();
   const trips = {
@@ -237,7 +239,12 @@ test("addTrip_ on an existing sheet: next ID, new form field becomes a column, t
   const old = ["20261201", "Old", "", "", "", "", "", "", "", "", "TRUE", "FALSE"];
   const { ctx, ss, trips } = makeTripSheet([headers.slice(), old.slice()]);
   const res = plain(ctx.addTrip_({ idToken: "t", values: formValues({ tripGear: "Tents" }) }));
-  assert.deepStrictEqual(res, { status: "success", tripId: "20261202" });
+  assert.deepStrictEqual([res.status, res.tripId], ["success", "20261202"]);
+  // the refreshed trip list and templates come back in the same call
+  assert.deepStrictEqual(res.trips.map((t) => t.tripId), ["20261201", "20261202"]);
+  assert.strictEqual(res.trips[1].acceptingResponses, true);
+  assert.strictEqual(res.trips[1].tripGear, "Tents");
+  assert.deepStrictEqual(res.templates.map((t) => t.tripId), ["20261202", "20261201"]);
   assert.deepStrictEqual(plain(trips.rows[0]), headers.concat(["tripGear"]));
   assert.deepStrictEqual(plain(trips.rows[1]), old);
   const row = plain(trips.rows[2]);
@@ -255,7 +262,7 @@ test("addTrip_ on an existing sheet: next ID, new form field becomes a column, t
 test("addTrip_ on an empty Trips sheet creates headers from the form", () => {
   const { ctx, trips } = makeTripSheet([]);
   const res = plain(ctx.addTrip_({ idToken: "t", values: { tripTitle: "A", tripMonth: "2026-01" } }));
-  assert.deepStrictEqual(res, { status: "success", tripId: "20260101" });
+  assert.deepStrictEqual([res.status, res.tripId], ["success", "20260101"]);
   assert.deepStrictEqual(plain(trips.rows[0]),
     ["tripId", "tripTitle", "customDepartureHtml", "acceptingResponses", "acceptingReceipts"]);
 });
@@ -533,6 +540,116 @@ test("slip submission: a changed or missing trip revision is accepted and flagge
   assert.strictEqual(plain(ctx.handlePermissionPost_("{}", Object.assign({ _tripRevision: "new" }, base))).status, "success");
   assert.ok(!flagsOf().includes("Trip"));
   assert.strictEqual(ss.sheets.Responses.rows.length, 4);
+});
+
+test("hubSessionOrNull_ bundles permissions, trips and templates, and never throws", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Trips = fakeSheet([["tripId", "tripTitle", "acceptingResponses"], ["20261101", "Camp", "FALSE"]], "Trips");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true, recordReimbursements: false });
+  const s = plain(ctx.hubSessionOrNull_("a@x.com"));
+  assert.deepStrictEqual([s.status, s.email, s.permissions], ["success", "a@x.com", { manageTrips: true, recordReimbursements: false }]);
+  assert.deepStrictEqual(s.trips.map((t) => t.tripTitle), ["Camp"]);
+  assert.deepStrictEqual(s.templates.map((t) => t.tripId), ["20261101"]);
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: false });
+  assert.strictEqual(plain(ctx.hubSessionOrNull_("a@x.com")).templates, undefined); // templates are for people who manage trips
+  ctx.getLeaderPermissions_ = () => { throw new Error("sheet unavailable"); };
+  assert.strictEqual(ctx.hubSessionOrNull_("a@x.com"), null);
+});
+
+test("signing in (Google remember-me or email code) returns the session in the same response", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Trips = fakeSheet([["tripId", "tripTitle", "acceptingResponses"], ["20261101", "Camp", "TRUE"]], "Trips");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  ctx.issueSessionToken_ = (email) => "ts1.token-for-" + email;
+
+  ctx.isSessionToken_ = () => false;
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "a@x.com", emailVerified: true, sub: "1", name: "A" });
+  const ex = plain(ctx.authExchange_({ idToken: "google" }));
+  assert.deepStrictEqual([ex.status, ex.token, ex.session.email], ["success", "ts1.token-for-a@x.com", "a@x.com"]);
+  assert.deepStrictEqual(ex.session.trips.map((t) => t.tripTitle), ["Camp"]);
+  assert.strictEqual(ex.session.permissions.manageTrips, true);
+
+  // email code: a cache holding the right code
+  const store = {};
+  ctx.CacheService = { getScriptCache: () => ({ get: (k) => store[k] || null, put: (k, v) => { store[k] = v; }, remove: (k) => { delete store[k]; } }) };
+  ctx.hmacB64_ = (t) => "h(" + t + ")";
+  ctx.emailKey_ = (prefix, email) => prefix + email;
+  store["code_b@x.com"] = JSON.stringify({ h: "h(b@x.com:123456)", tries: 0 });
+  const v = plain(ctx.authVerifyCode_({ email: "b@x.com", code: "123456" }));
+  assert.deepStrictEqual([v.status, v.session.email], ["success", "b@x.com"]);
+  assert.strictEqual(plain(ctx.authVerifyCode_({ email: "b@x.com", code: "123456" })).code, "bad_code"); // the code is single-use
+
+  // if the sheets are unavailable the sign-in still works; the page then asks for the session itself
+  store["code_c@x.com"] = JSON.stringify({ h: "h(c@x.com:123456)", tries: 0 });
+  ctx.getLeaderPermissions_ = () => { throw new Error("sheet unavailable"); };
+  const c = plain(ctx.authVerifyCode_({ email: "c@x.com", code: "123456" }));
+  assert.strictEqual(c.status, "success");
+  assert.strictEqual(c.session, null);
+});
+
+test("hubLists and hubFloatPlan carry the equipment list, and a broken list can't break the answer", () => {
+  const { ctx, ss } = makeHub();
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "l@x.com", emailVerified: true });
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  ss.sheets.Equipment = fakeSheet([["item", "quantity"], ["Tent", "3"]]);
+  ss.sheets.Responses = fakeSheet([["Form Type", "Youth Name", "tripId"], ["Youth", "Sam", "20261101"]], "Responses");
+  ctx.findSpreadsheet_ = (role) => (role === "equipment" ? ss : null);
+  const lists = plain(ctx.handleHub_({ action: "hubLists", idToken: "t" }));
+  assert.deepStrictEqual(lists.equipment, { status: "success", items: [{ item: "Tent", quantity: "3" }] });
+  assert.strictEqual(lists.recipes.code, "config"); // recipes not set up: reported on its own
+  const plan = plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  assert.deepStrictEqual(plan.responses.map((r) => r["Youth Name"]), ["Sam"]);
+  assert.deepStrictEqual(plan.equipment.items, [{ item: "Tent", quantity: "3" }]);
+  ctx.findSpreadsheet_ = () => { throw new Error("spreadsheet unavailable"); };
+  const broken = plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  assert.strictEqual(broken.status, "success"); // the roster still comes back
+  assert.strictEqual(broken.equipment.status, "error");
+});
+
+test("slipLoad: profiles and (when asked for) the trip in one call", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "mom@x.com", emailVerified: true });
+  ctx.getTripConfig_ = (_ss, id) => (id === "20261101" ? { tripId: id, tripTitle: "Camp", acceptingResponses: "TRUE" } : null);
+  save(ctx, "youth", "mom@x.com", youthFields());
+  const both = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "20261101" }));
+  assert.strictEqual(both.status, "success");
+  assert.strictEqual(both.trip.tripTitle, "Camp");
+  assert.deepStrictEqual(both.profiles.youth.map((p) => p["Youth Name"]), ["Sam Scout"]);
+  const noTrip = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t" }));
+  assert.strictEqual(noTrip.trip, undefined);
+  assert.strictEqual(noTrip.profiles.youth.length, 1);
+  const unknown = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "nope" }));
+  assert.strictEqual(unknown.trip.code, "not_found"); // reported inside, profiles still returned
+  assert.strictEqual(unknown.profiles.youth.length, 1);
+  ctx.verifyGoogleTokenInfo_ = () => null;
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "20261101" })).code, "signin");
+});
+
+test("slip submission saves the profile in the same call, and never lets that block the slip", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "mom@x.com", emailVerified: true });
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "r" });
+  const base = { _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Youth", "Youth Name": "Sam Scout", "Parent Signature": "Mom", "Youth Signature": "Sam", "Helmet?": "Yes" };
+  const submit = (extra) => plain(ctx.handlePermissionPost_("{}", Object.assign({}, base, extra)));
+
+  assert.strictEqual(submit({ _profile: { kind: "youth", data: youthFields({ Rank: "Scout" }) } }).status, "success");
+  const profile = plain(ctx.getUserProfiles_("mom@x.com")).youth;
+  assert.deepStrictEqual(profile.map((p) => [p["Youth Name"], p.Rank]), [["Sam Scout", "Scout"]]);
+  assert.ok(!("Helmet?" in profile[0]) && !("Parent Signature" in profile[0])); // one-off answers and signatures are not profile data
+  assert.ok(plain(ss.sheets.Responses.rows[0]).includes("Helmet?"));
+  assert.ok(!plain(ss.sheets.Responses.rows[0]).includes("_profile"));
+
+  // a refused or broken profile still lets the slip through; the honeypot saves nothing
+  assert.strictEqual(submit({ _profile: { kind: "nope", data: {} } }).status, "success");
+  assert.strictEqual(submit({ _profile: "garbage" }).status, "success");
+  ctx.saveProfile_ = () => { throw new Error("boom"); };
+  assert.strictEqual(submit({ _profile: { kind: "youth", data: youthFields() } }).status, "success");
+  ctx.saveProfile_ = () => { throw new Error("must not be called"); };
+  assert.strictEqual(submit({ website_url: "spam.example", _profile: { kind: "youth", data: youthFields() } }).status, "success");
+  assert.strictEqual(ss.sheets.Responses.rows.length, 6);
 });
 
 test("HUB_RECORDS entries are well-formed", () => {
