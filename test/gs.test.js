@@ -126,7 +126,7 @@ test("appendRecord_ refuses to grow a sheet past the column cap", () => {
 function makeHub() {
   const logged = [];
   const photoCalls = [];
-  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Code.gs"], {
+  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Code.gs"], {
     logEvent_: (stage, detail) => logged.push([stage, detail]),
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) }
   });
@@ -314,6 +314,115 @@ test("listEquipment_ and listRecipes_ return whole sheets, or a config error", (
   assert.strictEqual(ctx.listRecipes_().code, "config");
   ctx.findSpreadsheet_ = () => ss; // spreadsheet without the tab
   assert.deepStrictEqual(plain(ctx.listRecipes_()), { status: "success", items: [] });
+});
+
+const youthFields = (extra) => Object.assign({ "Youth Name": "Sam Scout", Patrol: "Eagles", "Medical Notes": "None" }, extra);
+const save = (ctx, kind, email, fields) => plain(ctx.saveProfile_(kind, email, fields));
+
+test("saveProfile_ creates a row whose columns are the sent fields, with the writer authorized", () => {
+  const { ctx, ss } = makeHub();
+  assert.deepStrictEqual(save(ctx, "youth", "mom@x.com", youthFields({ "Birth Year": "2012" })), { status: "success" });
+  const rows = plain(ss.sheets["Youth Profiles"].rows);
+  assert.deepStrictEqual(rows[0], ["Youth Name", "Authorized Emails", "Patrol", "Medical Notes", "Birth Year"]);
+  assert.deepStrictEqual(rows[1], ["Sam Scout", "mom@x.com", "Eagles", "None", "2012"]);
+});
+
+test("saveProfile_ updates the writer's own row, keeps other values, and adds only valid extra emails", () => {
+  const { ctx, ss } = makeHub();
+  save(ctx, "youth", "mom@x.com", youthFields({ Rank: "Scout" }));
+  save(ctx, "youth", "Mom@x.com", { "Youth Name": "  sam   scout ", Rank: "Tenderfoot", "Authorized Emails": "dad@x.com, *, junk, ;mom@x.com" });
+  const rows = plain(ss.sheets["Youth Profiles"].rows);
+  assert.strictEqual(rows.length, 2);
+  const row = Object.fromEntries(rows[0].map((h, i) => [h, rows[1][i]]));
+  assert.strictEqual(row["Youth Name"], "sam scout");
+  assert.strictEqual(row.Rank, "Tenderfoot");
+  assert.strictEqual(row.Patrol, "Eagles"); // kept
+  assert.strictEqual(row["Authorized Emails"], "mom@x.com, dad@x.com");
+});
+
+test("saveProfile_ never lets someone else's row be read or changed by reusing a name", () => {
+  const { ctx, ss } = makeHub();
+  save(ctx, "youth", "mom@x.com", youthFields({ "Medical Notes": "Peanut allergy" }));
+  save(ctx, "youth", "stranger@x.com", { "Youth Name": "Sam Scout", "Medical Notes": "mine" });
+  const rows = plain(ss.sheets["Youth Profiles"].rows);
+  assert.strictEqual(rows.length, 3); // a separate row
+  const get = (r) => Object.fromEntries(rows[0].map((h, i) => [h, rows[r][i]]));
+  assert.strictEqual(get(1)["Medical Notes"], "Peanut allergy");
+  assert.strictEqual(get(1)["Authorized Emails"], "mom@x.com");
+  assert.strictEqual(get(2)["Authorized Emails"], "stranger@x.com");
+  const mine = plain(ctx.getUserProfiles_("stranger@x.com"));
+  assert.deepStrictEqual(mine.youth.map((p) => p["Medical Notes"]), ["mine"]);
+  assert.deepStrictEqual(plain(ctx.getUserProfiles_("mom@x.com")).youth.map((p) => p["Medical Notes"]), ["Peanut allergy"]);
+});
+
+test("profiles: * is shared with everyone (leader-set only), private columns stay home", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets["Youth Profiles"] = fakeSheet([
+    ["Youth Name", "Authorized Emails", "_Leader Notes"],
+    ["Shared Kid", "*", "private"],
+    ["Other Kid", "mom@x.com", "private"]
+  ]);
+  const out = plain(ctx.getUserProfiles_("Anyone@x.com"));
+  assert.deepStrictEqual(out.youth, [{ "Youth Name": "Shared Kid", "Authorized Emails": "*" }]);
+  assert.deepStrictEqual(out.adult, []);
+  assert.deepStrictEqual(plain(ctx.getUserProfiles_("")).youth, []);
+});
+
+test("adult profiles live on their own tab and keep text cells as typed", () => {
+  const { ctx, ss } = makeHub();
+  save(ctx, "adult", "al@x.com", { "Adult Name": "Al Adult", "Ypt Date": "2026-01-05", "Veh Plate #": "=1+1" });
+  const sheet = ss.sheets["Adult Profiles"];
+  assert.deepStrictEqual(plain(sheet.rows[0]), ["Adult Name", "Authorized Emails", "Ypt Date", "Veh Plate #"]);
+  assert.deepStrictEqual(plain(sheet.rows[1]), ["Al Adult", "al@x.com", "2026-01-05", "=1+1"]);
+  assert.ok(sheet.formats.includes("@"));
+  assert.strictEqual(ss.sheets["Youth Profiles"], undefined);
+  assert.deepStrictEqual(plain(ctx.getUserProfiles_("al@x.com")).adult.map((p) => p["Adult Name"]), ["Al Adult"]);
+});
+
+test("saveProfile_ rejects what it should and writes nothing", () => {
+  const { ctx, ss } = makeHub();
+  assert.strictEqual(save(ctx, "youth", "a@x.com", { Patrol: "x" }).code, "invalid"); // no name
+  assert.strictEqual(save(ctx, "nope", "a@x.com", youthFields()).code, "invalid");
+  assert.strictEqual(save(ctx, "constructor", "a@x.com", youthFields()).code, "invalid");
+  assert.strictEqual(save(ctx, "youth", "a@x.com", youthFields({ "=BAD()": "x" })).code, "invalid");
+  assert.strictEqual((ss.sheets["Youth Profiles"] || { rows: [] }).rows.length, 0);
+
+  // a sheet that is nearly at the column cap can't take three more columns
+  const headers = ["Youth Name", "Authorized Emails"].concat(Array.from({ length: 57 }, (_, i) => "Old " + i));
+  ss.sheets["Youth Profiles"] = fakeSheet([headers]);
+  assert.strictEqual(save(ctx, "youth", "a@x.com", { "Youth Name": "A", "New 1": "x", "New 2": "x" }).code, "invalid");
+  assert.deepStrictEqual(plain(ss.sheets["Youth Profiles"].rows), [headers]);
+  assert.strictEqual(save(ctx, "youth", "a@x.com", { "Youth Name": "A", "New 1": "x" }).status, "success");
+});
+
+test("profileUser_ needs a verified email", () => {
+  const { ctx } = makeHub();
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "a@x.com", emailVerified: true });
+  assert.strictEqual(plain(ctx.profileUser_("t")).email, "a@x.com");
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "a@x.com", emailVerified: false });
+  assert.strictEqual(ctx.profileUser_("t"), null);
+  ctx.verifyGoogleTokenInfo_ = () => null;
+  assert.strictEqual(ctx.profileUser_("t"), null);
+});
+
+test("slip submission: flags come from SLIP_KINDS and no profile is saved from it", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "r" });
+  const submit = (extra) => plain(ctx.handlePermissionPost_("{}", Object.assign({ _idToken: "t", _tripId: "20261101", _tripRevision: "r" }, extra)));
+  const flagsOf = () => { const rows = ss.sheets.Responses.rows; const i = plain(rows[0]).indexOf("Flags"); return rows[rows.length - 1][i]; };
+
+  assert.strictEqual(submit({ "Form Type": "Adult", "Adult Name": "Al" }).status, "success");
+  assert.ok(flagsOf().includes("Missing signature") && !flagsOf().includes("Missing name"));
+  submit({ "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" });
+  assert.ok(!flagsOf().includes("Missing"));
+  submit({ "Form Type": "Youth", "Youth Name": "Sam", "Parent Signature": "Mom" });
+  assert.ok(flagsOf().includes("Missing signature"));
+  submit({ "Form Type": "Youth", "Parent Signature": "Mom", "Youth Signature": "Sam" });
+  assert.ok(flagsOf().includes("Missing name"));
+  assert.strictEqual(ss.sheets["Youth Profiles"], undefined);
+  assert.strictEqual(ss.sheets["Adult Profiles"], undefined);
 });
 
 test("HUB_RECORDS entries are well-formed", () => {

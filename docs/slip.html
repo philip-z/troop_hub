@@ -63,13 +63,13 @@
         </p>
       </div>
 
-      <fieldset id="youthSection" class="form-section">
+      <fieldset id="youthSection" class="form-section" data-profile-kind="youth">
         <legend class="sr-only">Youth permission slip</legend>
         <div class="agreement">
           <strong>The Scout Permission Slip:</strong><br>
           <p>
             Having full confidence that every precaution will be taken to ensure the safety of my child
-            <input type="text" id="scoutName" name="Youth Name" required placeholder="Scout Name" aria-label="Scout name" autocomplete="off" list="scoutNamesList">
+            <input type="text" id="scoutName" name="Youth Name" data-profile data-profile-key required placeholder="Scout Name" aria-label="Scout name" autocomplete="off" list="scoutNamesList">
             <datalist id="scoutNamesList"></datalist>
             , I hereby give permission for them to participate in the Troop 58 activity described above.
           </p>
@@ -110,7 +110,7 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
               <div>
                 <label for="scoutGender" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Gender</label>
-                <select id="scoutGender" name="Gender" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <select id="scoutGender" name="Gender" data-profile style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                   <option value="">-- Select --</option>
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
@@ -119,11 +119,11 @@
               </div>
               <div>
                 <label for="birthYear" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Birth Year</label>
-                <input type="number" id="birthYear" name="Birth Year" placeholder="YYYY" min="2005" max="2018" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="number" id="birthYear" name="Birth Year" data-profile placeholder="YYYY" min="2005" max="2018" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
               <div>
                 <label for="birthMonth" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Birth Month</label>
-                <select id="birthMonth" name="Birth Month" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <select id="birthMonth" name="Birth Month" data-profile style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                   <option value="">-- Month --</option>
                   <option value="01">January</option>
                   <option value="02">February</option>
@@ -144,37 +144,37 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
               <div>
                 <label for="scoutPatrol" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Patrol</label>
-                <input type="text" id="scoutPatrol" name="Patrol" placeholder="e.g. Eagles" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="text" id="scoutPatrol" name="Patrol" data-profile placeholder="e.g. Eagles" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
               <div>
                 <label for="scoutRank" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Rank</label>
-                <input type="text" id="scoutRank" name="Rank" placeholder="e.g. First Class" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="text" id="scoutRank" name="Rank" data-profile placeholder="e.g. First Class" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
               <div>
                 <label for="scoutPosition" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Position</label>
-                <input type="text" id="scoutPosition" name="Position" placeholder="e.g. Patrol Leader" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="text" id="scoutPosition" name="Position" data-profile placeholder="e.g. Patrol Leader" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
             </div>
 
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
               <div>
                 <label for="emergencyContact" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Emergency Phone *</label>
-                <input type="tel" id="emergencyContact" name="Youth Emergency Phone" required placeholder="Primary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="tel" id="emergencyContact" name="Youth Emergency Phone" data-profile required placeholder="Primary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
               <div>
                 <label for="emergencyContact2" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Home / Other Phone</label>
-                <input type="tel" id="emergencyContact2" name="Youth Home Phone" placeholder="Secondary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="tel" id="emergencyContact2" name="Youth Home Phone" data-profile placeholder="Secondary Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
             </div>
 
             <div style="margin-bottom: 12px;">
               <label for="parentEmails" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Parent Emails (for family records)</label>
-              <input type="text" id="parentEmails" name="Authorized Emails" placeholder="parent1@gmail.com, parent2@gmail.com" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              <input type="text" id="parentEmails" name="Authorized Emails" data-profile placeholder="parent1@gmail.com, parent2@gmail.com" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
             </div>
 
             <div>
               <label for="medicalNotes" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Medical Notes, Allergies & Special Needs</label>
-              <textarea id="medicalNotes" name="Medical Notes" rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
+              <textarea id="medicalNotes" name="Medical Notes" data-profile rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
               <small style="display: block; color: #555; margin-top: 4px; font-size: 0.85rem;">
                 Please write 'None' or 'N/A' if reviewed and nothing is applicable.
               </small>
@@ -183,11 +183,12 @@
         </div>
       </fieldset>
 
-      <fieldset id="adultSection" class="form-section" disabled hidden>
+      <fieldset id="adultSection" class="form-section" data-profile-kind="adult" disabled hidden>
         <legend class="sr-only">Adult permission slip</legend>
         <div class="agreement">
           <strong>I</strong>
-          <input type="text" id="adultName" name="Adult Name" required placeholder="Insert Name" aria-label="Adult name" autocomplete="name">
+          <input type="text" id="adultName" name="Adult Name" data-profile data-profile-key required placeholder="Insert Name" aria-label="Adult name" autocomplete="name" list="adultNamesList">
+          <datalist id="adultNamesList"></datalist>
           <strong>am over 18 years of age</strong>
           and will participate in the Troop 58 activity described above.
 
@@ -213,7 +214,7 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
               <div>
                 <label for="adultGender" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Gender</label>
-                <select id="adultGender" name="Gender" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <select id="adultGender" name="Gender" data-profile style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                   <option value="">-- Select --</option>
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
@@ -222,23 +223,23 @@
               </div>
               <div>
                 <label for="adultPosition" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Position / Role</label>
-                <input type="text" id="adultPosition" name="Position" placeholder="e.g. Assistant Scoutmaster / Driver" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="text" id="adultPosition" name="Position" data-profile placeholder="e.g. Assistant Scoutmaster / Driver" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
             </div>
 
             <div style="margin-bottom: 12px;">
               <label for="adultEmails" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Adult Email</label>
-              <input type="email" id="adultEmails" name="Adult Email" placeholder="you@example.com" autocomplete="email" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+              <input type="email" id="adultEmails" name="Adult Email" data-profile placeholder="you@example.com" autocomplete="email" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
             </div>
 
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
               <div>
                 <label for="cellPhone" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Adult Cell Phone</label>
-                <input type="tel" id="cellPhone" name="Adult Cell Phone" placeholder="Cell Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="tel" id="cellPhone" name="Adult Cell Phone" data-profile placeholder="Cell Phone" inputmode="tel" autocomplete="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
               <div>
                 <label for="emergencyPhone" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Emergency Phone *</label>
-                <input type="tel" id="emergencyPhone" name="Adult Emergency Phone" required placeholder="Emergency Phone" inputmode="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                <input type="tel" id="emergencyPhone" name="Adult Emergency Phone" data-profile required placeholder="Emergency Phone" inputmode="tel" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
               </div>
             </div>
 
@@ -258,31 +259,31 @@
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Youth Protection Training (YPT)</label>
-                  <input type="date" id="yptDate" name="Ypt Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="yptDate" name="Ypt Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Hazardous Weather Training</label>
-                  <input type="date" id="hwDate" name="Hw Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="hwDate" name="Hw Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">BSA Lifeguard</label>
-                  <input type="date" id="blgDate" name="Blg Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="blgDate" name="Blg Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Safe Swim Defense</label>
-                  <input type="date" id="ssdDate" name="Ssd Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="ssdDate" name="Ssd Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">First Aid</label>
-                  <input type="date" id="faDate" name="Fa Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="faDate" name="Fa Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Safety Afloat</label>
-                  <input type="date" id="saDate" name="Sa Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="saDate" name="Sa Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">CPR Certification</label>
-                  <input type="date" id="cprDate" name="Cpr Date" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="date" id="cprDate" name="Cpr Date" data-profile style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
               </div>
             </div>
@@ -296,33 +297,33 @@
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Vehicle Plate #</label>
-                  <input type="text" name="Veh Plate #" placeholder="Plate #" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="text" name="Veh Plate #" data-profile placeholder="Plate #" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">State</label>
-                  <input type="text" name="Veh State" placeholder="State" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="text" name="Veh State" data-profile placeholder="State" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Year</label>
-                  <input type="number" name="Veh Year" placeholder="YYYY" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="number" name="Veh Year" data-profile placeholder="YYYY" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
               </div>
               <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px;">
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Make</label>
-                  <input type="text" name="Veh Make" id="vehMake" list="vehMakeList" placeholder="e.g. Ford" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="text" name="Veh Make" data-profile id="vehMake" list="vehMakeList" placeholder="e.g. Ford" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Model</label>
-                  <input type="text" name="Veh Model" id="vehModel" list="vehModelList" placeholder="e.g. Explorer" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="text" name="Veh Model" data-profile id="vehModel" list="vehModelList" placeholder="e.g. Explorer" autocomplete="off" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;"># of Seatbelts</label>
-                  <input type="number" name="Veh Seats" placeholder="Total" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="number" name="Veh Seats" data-profile placeholder="Total" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
                 <div>
                   <label style="display: block; font-size: 0.8rem; margin-bottom: 2px;">Passenger Limit (incl. driver)</label>
-                  <input type="number" name="Veh Passengers" placeholder="Limit" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                  <input type="number" name="Veh Passengers" data-profile placeholder="Limit" min="1" max="15" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
                 </div>
               </div>
               <div>
@@ -335,7 +336,7 @@
 
             <div style="border-top: 1px solid #cce0f5; padding-top: 12px;">
               <label for="adultMedicalNotes" style="display: block; font-size: 0.85rem; font-weight: bold; margin-bottom: 4px;">Medical Notes, Allergies & Special Needs</label>
-              <textarea id="adultMedicalNotes" name="Medical Notes" rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
+              <textarea id="adultMedicalNotes" name="Medical Notes" data-profile rows="3" placeholder="Medications, allergies, dietary restrictions, or other needs" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></textarea>
               <small style="display: block; color: #555; margin-top: 4px; font-size: 0.85rem;">
                 Please write 'None' or 'N/A' if reviewed and nothing is applicable.
               </small>

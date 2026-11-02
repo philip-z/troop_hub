@@ -39,7 +39,7 @@ function runDiagnostics() {
     'UrlFetch': function() { return UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=x', { muteHttpExceptions: true }).getResponseCode(); },
     'Cache': function() { CacheService.getScriptCache().put('diag', '1', 5); return 'ok'; },
     'Lock': function() { var l = LockService.getScriptLock(); l.waitLock(5000); l.releaseLock(); return 'ok'; },
-    'Profiles sheet': function() { return ss.getSheetByName('Profiles') ? 'exists' : 'missing (created on first save)'; },
+    'Profile sheets': function() { return Object.keys(SLIP_KINDS).map(function(k) { var t = SLIP_KINDS[k].profileTab; return t + ': ' + (ss.getSheetByName(t) ? 'exists' : 'missing (created on first save)'); }).join('; '); },
     'Trips sheet': function() { return ss.getSheetByName('Trips') ? 'exists' : 'MISSING'; },
     'Equipment spreadsheet': function() { var e = findSpreadsheet_('equipment'); return !e ? 'NOT CONFIGURED (set EQUIPMENT_SHEET_ID)' : e.getSheetByName('Equipment') ? 'ok' : 'tab "Equipment" MISSING'; },
     'Recipes spreadsheet': function() { var r = findSpreadsheet_('recipes'); return !r ? 'NOT CONFIGURED (set RECIPES_SHEET_ID)' : r.getSheetByName('Recipes') ? 'ok' : 'tab "Recipes" MISSING'; }

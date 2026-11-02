@@ -46,12 +46,11 @@ const db = {
     { name: "Campfire chili", serves: "8", ingredients: "2 lb ground beef\n2 cans kidney beans\n1 1/2 cups diced onion\n2 tbsp chili powder", notes: "Dutch oven" },
     { name: "Pancakes", serves: "6", ingredients: "3 cups flour\n2 cups milk\n2 eggs", notes: "" }
   ],
-  profiles: {},   // sub -> parent fields
-  youth: {}       // sub -> [youth fields]
+  profiles: {}    // profile tab name -> grid (header row first), like the sheet
 };
 
 // The real helpers and validation from apps-script/, so the mock can't drift from them.
-const gs = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Code.gs"], { logEvent_() {} });
+const gs = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Code.gs"], { logEvent_() {} });
 
 const truthy = (v) => ["true", "yes", "y", "1", "x"].includes(String(v ?? "").trim().toLowerCase());
 const revision = (t) => crypto.createHash("sha256").update(JSON.stringify(t)).digest("base64url");
@@ -188,28 +187,35 @@ function addTrip(data) {
   return { status: "success", tripId };
 }
 
-function saveProfile(sub, fields) {
-  const youth = {}, parent = {};
-  Object.entries(fields).forEach(([k, v]) => { if (k.startsWith("_")) return; (k.startsWith("Youth ") ? youth : parent)[k] = Array.isArray(v) ? v.join(", ") : v; });
-  db.profiles[sub] = Object.assign(db.profiles[sub] || {}, parent);
-  const name = String(youth["Youth Name"] || "").trim().toLowerCase();
-  if (!name) return;
-  const list = (db.youth[sub] = db.youth[sub] || []);
-  const i = list.findIndex((y) => String(y["Youth Name"]).trim().toLowerCase() === name);
-  if (i >= 0) Object.assign(list[i], youth); else list.push(youth);
+// Saved profiles: the real planning (who may update which row, what the columns are) from
+// apps-script/Slip.gs, applied to an in-memory grid per tab like a sheet.
+function saveProfile(kind, email, profileData) {
+  const spec = Object.prototype.hasOwnProperty.call(gs.SLIP_KINDS, String(kind)) ? gs.SLIP_KINDS[kind] : null;
+  if (!spec) return err("invalid", "Unknown profile type.");
+  const clean = gs.cleanRecordFields_(profileData, [], { textCells: true });
+  if (clean.error) return err("invalid", clean.error);
+  const grid = (db.profiles[spec.profileTab] = db.profiles[spec.profileTab] || []);
+  const plan = gs.planProfileSave_(grid, spec, email, clean.fields);
+  if (plan.error) return err("invalid", plan.error);
+  grid[0] = [...plan.headers];
+  if (plan.rowIndex >= 0) grid[plan.rowIndex] = [...plan.row]; else grid.push([...plan.row]);
+  return { status: "success" };
+}
+
+function profilesFor(email) {
+  return Object.fromEntries(Object.entries(gs.SLIP_KINDS).map(([kind, spec]) => [kind, gs.profileRowsFor_(db.profiles[spec.profileTab] || [], email)]));
 }
 
 function slipPost(data) {
   if (data.action === "getProfile") {
     const info = verify(data.idToken);
-    if (!info) return { error: "unauthorized" };
-    return Object.assign({}, db.profiles[info.sub], db.youth[info.sub] ? { youthProfiles: db.youth[info.sub] } : {});
+    if (!info || !info.emailVerified || !info.email) return { error: "unauthorized" };
+    return { status: "success", profiles: profilesFor(info.email) };
   }
   if (data.action === "saveProfile") {
     const info = verify(data.idToken);
-    if (!info) return { status: "error", message: "unauthorized" };
-    saveProfile(info.sub, data.profileData || {});
-    return { status: "success" };
+    if (!info || !info.emailVerified || !info.email) return { status: "error", message: "unauthorized" };
+    return saveProfile(data.kind, info.email, data.profileData);
   }
   if (data.action === "slipTrip") {
     if (!verify(data.idToken)) return err("signin", "Please sign in to view this trip.");
@@ -229,13 +235,6 @@ function slipPost(data) {
   Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
   row.tripId = trip.tripId;
   db.tables.Responses.push(row);
-  const info = data._idToken && !data.website_url ? verify(data._idToken) : null;
-  if (info) {
-    const p = Object.assign({}, row);
-    ["Timestamp", "Form Type", "tripId"].forEach((k) => delete p[k]);
-    Object.keys(p).forEach((k) => { if (k.toLowerCase().includes("signature")) delete p[k]; });
-    saveProfile(info.sub, p);
-  }
   return { status: "success" };
 }
 

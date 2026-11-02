@@ -20,14 +20,15 @@ var LIBRARY_MAX_COLUMNS = 40;
 var LIBRARY_CELL_MAX = 2000;
 
 // Pure: turns a sheet's display values (row 1 = headers) into one object per row, keyed
-// by header. Skips private and blank headers (and repeats of a header), caps columns and
+// by header (maxColumns defaults to LIBRARY_MAX_COLUMNS). Skips private and blank headers (and repeats of a header), caps columns and
 // cell length, and drops rows with nothing in any sent column.
-function tableRows_(values) {
+function tableRows_(values, maxColumns) {
   if (!values || values.length < 2) return [];
+  maxColumns = maxColumns || LIBRARY_MAX_COLUMNS;
   var keep = [], seen = {};
   values[0].forEach(function(h, i) {
     var name = String(h === undefined || h === null ? '' : h).trim();
-    if (name === '' || name.charAt(0) === '_' || seen[name] || keep.length >= LIBRARY_MAX_COLUMNS) return;
+    if (name === '' || name.charAt(0) === '_' || seen[name] || keep.length >= maxColumns) return;
     seen[name] = true;
     keep.push({ name: name, index: i });
   });
