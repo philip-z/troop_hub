@@ -7,6 +7,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { loadGs } = require("./gs-loader.js");
 
 const ROOT = path.join(__dirname, "..");
 const SITE = path.join(ROOT, "docs");
@@ -38,23 +39,30 @@ const db = {
     { item: "Dutch oven (12 in)", category: "Cooking", quantity: "4", status: "In trailer", notes: "Clean before returning" },
     { item: "6-person tent", category: "Camping", quantity: "6", status: "2 out with Troop 58 Patrol Blue", notes: "" },
     { item: "Propane stove", category: "Cooking", quantity: "3", status: "In trailer", notes: "Check hoses each season" },
-    { item: "First aid kit", category: "Safety", quantity: "2", status: "Needs restocking", notes: "" }
+    // A column starting with "_" is private: the real script never sends it.
+    { item: "First aid kit", category: "Safety", quantity: "2", status: "Needs restocking", notes: "", _supplier: "private, should never reach the browser" }
   ],
   recipes: [
     { name: "Campfire chili", serves: "8", ingredients: "2 lb ground beef\n2 cans kidney beans\n1 1/2 cups diced onion\n2 tbsp chili powder", notes: "Dutch oven" },
     { name: "Pancakes", serves: "6", ingredients: "3 cups flour\n2 cups milk\n2 eggs", notes: "" }
   ],
-  profiles: {},   // sub -> parent fields
-  youth: {}       // sub -> [youth fields]
+  profiles: {}    // profile tab name -> grid (header row first), like the sheet
 };
+
+// The real helpers and validation from apps-script/, so the mock can't drift from them.
+const gs = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Code.gs"], { logEvent_() {} });
 
 const truthy = (v) => ["true", "yes", "y", "1", "x"].includes(String(v ?? "").trim().toLowerCase());
 const revision = (t) => crypto.createHash("sha256").update(JSON.stringify(t)).digest("base64url");
 const tripConfig = (id) => { const t = db.trips.find((x) => x.tripId === String(id || "").trim()); return t ? Object.assign({}, t, { _tripRevision: revision(t) }) : null; };
-const tripSummary = (t) => ({ id: t.tripId, name: t.tripTitle, date: t.tripDates, location: t.tripLocation, cost: t.tripCost,
-  acceptingResponses: truthy(t.acceptingResponses), acceptingReceipts: truthy(t.acceptingReceipts),
-  ...(truthy(t.acceptingResponses) ? { slip: tripConfig(t.tripId) } : {}) });
-const cell = (v) => { const s = v == null ? "" : String(v).slice(0, 1000); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };
+const tripSummary = (t) => {
+  const s = gs.tripSummary_(t);
+  if (s.acceptingResponses) s.slip = tripConfig(t.tripId);
+  return s;
+};
+
+// Array of row objects -> the header-row-plus-rows grid a sheet would hand the real script.
+const grid = (objs) => { const cols = [...new Set(objs.flatMap(Object.keys))]; return [cols, ...objs.map((o) => cols.map((c) => o[c] ?? ""))]; };
 const err = (code, message) => ({ status: "error", code, message });
 
 // ---- fake token verification (accepts the unsigned tokens from dev/mock-gsi.js) ----
@@ -107,11 +115,7 @@ function auth(data, permission) {
 }
 
 // ---- routes ----
-const HUB_RECORDS = {
-  receipt: { tab: "Receipts", permission: "", fields: ["tripId", "tripName", "description", "amount", "url"] },
-  payment: { tab: "Payments", permission: "recordPayments", fields: ["tripId", "scout", "amount", "method"] },
-  reimbursement: { tab: "Reimbursements", permission: "recordReimbursements", fields: ["tripId", "payee", "amount", "notes"] }
-};
+const HUB_RECORDS = gs.HUB_RECORDS;
 
 function hub(data) {
   let a;
@@ -130,39 +134,36 @@ function hub(data) {
       return { status: "success", trips: db.trips.map((t) => tripSummary(t)) };
     case "hubListEquipment":
       a = auth(data, ""); if (a.error) return a.error;
-      return { status: "success", items: db.equipment };
+      return { status: "success", items: gs.tableRows_(grid(db.equipment)) };
     case "hubListRecipes":
       a = auth(data, ""); if (a.error) return a.error;
-      return { status: "success", items: db.recipes };
+      return { status: "success", items: gs.tableRows_(grid(db.recipes)) };
     case "hubSubmit": {
       const spec = HUB_RECORDS[data.kind];
       if (!spec) return err("invalid", "Unknown record type.");
       a = auth(data, spec.permission); if (a.error) return a.error;
-      const values = data.values || {};
-      const trip = tripConfig(values.tripId);
+      const trip = tripConfig(data.tripId);
       if (!trip) return err("not_found", "Trip not found.");
-      if (data.kind === "receipt" && !truthy(trip.acceptingReceipts)) return err("closed", "This trip is not accepting receipts.");
-      values.tripId = trip.tripId; values.tripName = trip.tripTitle;
-      values.url = "";
-      if (data.kind === "receipt" && values.photo && values.photo.data) {
-        const buf = Buffer.from(String(values.photo.data), "base64");
+      if (spec.tripFlag && !truthy(trip[spec.tripFlag])) return err("closed", spec.closedMessage);
+      const base = gs.hubServerFields_(spec, trip, "", a.info.email);
+      const clean = gs.cleanRecordFields_(data.values, Object.keys(base.before).concat(Object.keys(base.after)));
+      if (clean.error) return err("invalid", clean.error);
+      let url = "";
+      if (spec.photoColumn && data.photo && data.photo.data) {
+        const buf = Buffer.from(String(data.photo.data), "base64");
         if (buf.length > MAX_PHOTO_BYTES) return err("invalid", "That photo is too large.");
         if (buf[0] !== 0xff || buf[1] !== 0xd8) return err("invalid", "The photo must be a JPEG image.");
         photos.push(buf);
-        values.url = "http://localhost:" + PORT + "/dev/receipt/" + (photos.length - 1) + ".jpg";
+        url = "http://localhost:" + PORT + "/dev/receipt/" + (photos.length - 1) + ".jpg";
       }
-      db.tables[spec.tab].push([new Date().toISOString(), ...spec.fields.map((f) => cell(values[f])), a.info.email]);
+      const server = gs.hubServerFields_(spec, trip, url, a.info.email);
+      db.tables[spec.tab].push(Object.assign({}, server.before, clean.fields, server.after));
       return { status: "success" };
     }
   }
   return err("invalid", "Unknown action.");
 }
 
-function nextTripId(month) {
-  const prefix = month.replace("-", "");
-  const max = Math.max(0, ...db.trips.map((t) => t.tripId).filter((id) => id.length === 8 && id.startsWith(prefix)).map((id) => Number(id.slice(6)) || 0));
-  return max >= 99 ? "" : prefix + String(max + 1).padStart(2, "0");
-}
 
 function listTripTemplates(data) {
   const a = auth(data, "addTrips"); if (a.error) return a.error;
@@ -170,63 +171,51 @@ function listTripTemplates(data) {
 }
 
 function tripTemplates() {
-  const unesc = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-  const trips = db.trips.map((t) => ({
-    id: t.tripId, tripTitle: t.tripTitle, tripDates: t.tripDates, tripLocation: t.tripLocation, departureDetails: t.departureDetails,
-    departureOptions: [...String(t.customDepartureHtml || "").matchAll(/<option value="([^"]+)">/g)].map((m) => unesc(m[1])).join("\n"),
-    returnDetails: t.returnDetails, tripCost: t.tripCost, tripCoordinator: t.tripCoordinator, tripUniform: t.tripUniform
-  })).sort((x, y) => (x.id < y.id ? 1 : x.id > y.id ? -1 : 0));
-  return trips;
+  return [...db.trips].sort((x, y) => (x.tripId < y.tripId ? 1 : x.tripId > y.tripId ? -1 : 0)).map((t) => gs.tripTemplateFromRow_(t));
 }
 
 function addTrip(data) {
   const info = verify(data.idToken);
   if (!info) return SIGNIN_ERR;
   if (!info.emailVerified || !permissionsFor(info.email).addTrips) return err("not_allowed", "Your account (" + info.email + ") is not allowed to add trips. Ask a leader to tick addTrips for you on the Leaders sheet.");
-  const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
-  const cols = ["tripTitle", "tripLocation", "tripDates", "departureDetails", "returnDetails", "tripCost", "tripCoordinator", "tripUniform"];
-  const trip = {}; cols.forEach((c) => { trip[c] = clean(data[c]); });
-  const missing = ["tripTitle", "tripLocation", "tripDates"].filter((c) => !trip[c]);
-  if (missing.length) return err("invalid", "Missing required field(s): " + missing.join(", "));
-  const month = String(data.tripMonth || "").trim();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return err("invalid", "Choose the trip month.");
-  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const opts = String(data.departureOptions || "").split(/\r?\n/).map((s) => clean(s).slice(0, 100)).filter(Boolean).slice(0, 20);
-  trip.customDepartureHtml = opts.length
-    ? esc(trip.departureDetails) + '<br><label for="departureOption"><strong>Departure option:</strong></label> <select id="departureOption" name="Departure Option" required><option value="">-- Choose one --</option>' +
-      opts.map((o) => '<option value="' + esc(o) + '">' + esc(o) + "</option>").join("") + "</select><br>"
-    : "";
-  trip.tripId = nextTripId(month);
-  if (!trip.tripId) return err("invalid", "That month already has 99 trips.");
-  trip.acceptingResponses = truthy(data.acceptingResponses) ? "TRUE" : "FALSE";
-  trip.acceptingReceipts = truthy(data.acceptingReceipts) ? "TRUE" : "FALSE";
-  db.trips.push(trip);
-  db.tables["Trip Log"].push([new Date().toISOString(), info.email, trip.tripTitle, trip.tripDates]);
-  return { status: "success", tripId: trip.tripId };
+  const rec = gs.buildTripRecord_(data.values);
+  if (rec.error) return err("invalid", rec.error);
+  const tripId = gs.nextTripId_(rec.month, db.trips.map((t) => t.tripId));
+  if (!tripId) return err("invalid", "That month already has 99 trips.");
+  db.trips.push(Object.assign({ tripId }, rec.fields, rec.after));
+  db.tables["Trip Log"].push([new Date().toISOString(), info.email, rec.fields.tripTitle || "", rec.fields.tripDates || ""]);
+  return { status: "success", tripId };
 }
 
-function saveProfile(sub, fields) {
-  const youth = {}, parent = {};
-  Object.entries(fields).forEach(([k, v]) => { if (k.startsWith("_")) return; (k.startsWith("Youth ") ? youth : parent)[k] = Array.isArray(v) ? v.join(", ") : v; });
-  db.profiles[sub] = Object.assign(db.profiles[sub] || {}, parent);
-  const name = String(youth["Youth Name"] || "").trim().toLowerCase();
-  if (!name) return;
-  const list = (db.youth[sub] = db.youth[sub] || []);
-  const i = list.findIndex((y) => String(y["Youth Name"]).trim().toLowerCase() === name);
-  if (i >= 0) Object.assign(list[i], youth); else list.push(youth);
+// Saved profiles: the real planning (who may update which row, what the columns are) from
+// apps-script/Slip.gs, applied to an in-memory grid per tab like a sheet.
+function saveProfile(kind, email, profileData) {
+  const spec = Object.prototype.hasOwnProperty.call(gs.SLIP_KINDS, String(kind)) ? gs.SLIP_KINDS[kind] : null;
+  if (!spec) return err("invalid", "Unknown profile type.");
+  const clean = gs.cleanRecordFields_(profileData, [], { textCells: true });
+  if (clean.error) return err("invalid", clean.error);
+  const grid = (db.profiles[spec.profileTab] = db.profiles[spec.profileTab] || []);
+  const plan = gs.planProfileSave_(grid, spec, email, clean.fields);
+  if (plan.error) return err("invalid", plan.error);
+  grid[0] = [...plan.headers];
+  if (plan.rowIndex >= 0) grid[plan.rowIndex] = [...plan.row]; else grid.push([...plan.row]);
+  return { status: "success" };
+}
+
+function profilesFor(email) {
+  return Object.fromEntries(Object.entries(gs.SLIP_KINDS).map(([kind, spec]) => [kind, gs.profileRowsFor_(db.profiles[spec.profileTab] || [], email)]));
 }
 
 function slipPost(data) {
   if (data.action === "getProfile") {
     const info = verify(data.idToken);
-    if (!info) return { error: "unauthorized" };
-    return Object.assign({}, db.profiles[info.sub], db.youth[info.sub] ? { youthProfiles: db.youth[info.sub] } : {});
+    if (!info || !info.emailVerified || !info.email) return { error: "unauthorized" };
+    return { status: "success", profiles: profilesFor(info.email) };
   }
   if (data.action === "saveProfile") {
     const info = verify(data.idToken);
-    if (!info) return { status: "error", message: "unauthorized" };
-    saveProfile(info.sub, data.profileData || {});
-    return { status: "success" };
+    if (!info || !info.emailVerified || !info.email) return { status: "error", message: "unauthorized" };
+    return saveProfile(data.kind, info.email, data.profileData);
   }
   if (data.action === "slipTrip") {
     if (!verify(data.idToken)) return err("signin", "Please sign in to view this trip.");
@@ -246,13 +235,6 @@ function slipPost(data) {
   Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
   row.tripId = trip.tripId;
   db.tables.Responses.push(row);
-  const info = data._idToken && !data.website_url ? verify(data._idToken) : null;
-  if (info) {
-    const p = Object.assign({}, row);
-    ["Timestamp", "Form Type", "tripId"].forEach((k) => delete p[k]);
-    Object.keys(p).forEach((k) => { if (k.toLowerCase().includes("signature")) delete p[k]; });
-    saveProfile(info.sub, p);
-  }
   return { status: "success" };
 }
 

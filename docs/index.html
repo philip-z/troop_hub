@@ -36,17 +36,19 @@
       <h3>Troop equipment</h3>
       <label>Search <input id="equipment-filter" type="search" placeholder="e.g. tent"></label>
       <p id="equipment-status" role="status"></p>
-      <ul id="equipment"></ul>
+      <!-- Column names (the headers in the Equipment sheet) for each part of an item; searching covers these too. -->
+      <ul id="equipment" data-title="item" data-count="quantity" data-details="category,status,notes"></ul>
     </section>
 
     <section role="tabpanel" id="panel-meals" aria-labelledby="tab-meals" hidden>
       <form id="recipe-form">
         <label id="recipe-pick-row" hidden>Start from a troop recipe
-          <select id="recipe-pick"><option value="">-- Choose a recipe --</option></select></label>
-        <label>Recipe name <input name="name" required></label>
+          <!-- data-label / data-recipe name the Recipes sheet column used for the dropdown text and for each input. -->
+                    <select id="recipe-pick" data-label="name"><option value="">-- Choose a recipe --</option></select></label>
+        <label>Recipe name <input name="name" data-recipe="name" required></label>
         <label>Ingredients (one per line, e.g. "1 1/2 cups flour")
-          <textarea name="ingredients" rows="5" required></textarea></label>
-        <label>Recipe serves <input name="from" type="number" min="1" value="4" required></label>
+          <textarea name="ingredients" data-recipe="ingredients" rows="5" required></textarea></label>
+        <label>Recipe serves <input name="from" data-recipe="serves" type="number" min="1" value="4" required></label>
         <label>Number eating <input name="to" type="number" min="1" value="10" required></label>
         <button>Add to meal plan</button>
       </form>
@@ -59,8 +61,8 @@
   <dialog id="receipt-dialog">
     <form id="receipt-form" method="dialog">
       <h3 id="receipt-title"></h3>
-      <label>Description <input name="description" required></label>
-      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
+      <label>Description <input name="Description" required></label>
+      <label>Amount ($) <input name="Amount" type="number" min="0" step="0.01" required></label>
       <label>Photo of the receipt (optional)
         <input name="photo" id="receipt-photo" type="file" accept="image/*"></label>
       <img id="receipt-preview" alt="Receipt preview" hidden>
@@ -72,9 +74,9 @@
   <dialog id="payment-dialog">
     <form id="payment-form" method="dialog">
       <h3 id="payment-title"></h3>
-      <label>Participant name <input name="participant" required></label>
-      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
-      <label>Method <select name="method"><option>Check</option><option>Cash</option><option>Online</option></select></label>
+      <label>Participant name <input name="Scout" required></label>
+      <label>Amount ($) <input name="Amount" type="number" min="0" step="0.01" required></label>
+      <label>Method <select name="Method"><option>Check</option><option>Cash</option><option>Online</option></select></label>
       <button value="ok">Record payment</button>
       <button value="cancel" type="button" id="payment-cancel">Cancel</button>
     </form>
@@ -83,9 +85,9 @@
   <dialog id="reimb-dialog">
     <form id="reimb-form" method="dialog">
       <h3 id="reimb-title"></h3>
-      <label>Paid to <input name="payee" required></label>
-      <label>Amount ($) <input name="amount" type="number" min="0" step="0.01" required></label>
-      <label>Notes <input name="notes"></label>
+      <label>Paid to <input name="Paid To" required></label>
+      <label>Amount ($) <input name="Amount" type="number" min="0" step="0.01" required></label>
+      <label>Notes <input name="Notes"></label>
       <button value="ok">Record reimbursement</button>
       <button value="cancel" type="button" id="reimb-cancel">Cancel</button>
     </form>

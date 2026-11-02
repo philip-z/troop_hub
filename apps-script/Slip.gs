@@ -6,6 +6,24 @@ var MAX_FIELDS = 80;
 var MAX_PAYLOAD_CHARS = 60000;
 var HONEYPOT_FIELD = 'website_url';
 
+// The slip form columns this script acts on (everything else in a submission or a saved
+// profile is whatever the inputs in slip.html are named). The keys are the lower-cased
+// values of the `Form Type` select and of the `kind` slip.js sends with a profile.
+//   nameColumn        the input that names the person: checked on submit, and it
+//                     identifies the profile row
+//   signatureColumns  all must be filled, or the response is flagged
+//   profileTab        where that kind's saved profiles live (one row per person)
+var SLIP_FORM_TYPE_COLUMN = 'Form Type';
+var SLIP_KINDS = {
+  youth: { nameColumn: 'Youth Name', signatureColumns: ['Parent Signature', 'Youth Signature'], profileTab: 'Youth Profiles' },
+  adult: { nameColumn: 'Adult Name', signatureColumns: ['Adult Signature'], profileTab: 'Adult Profiles' }
+};
+// Profile column listing who may read and update a row: comma-separated emails. The script
+// adds the signed-in writer; a leader can put * in the sheet to share a row with everyone
+// (the browser can never set it).
+var PROFILE_AUTH_COLUMN = 'Authorized Emails';
+var PROFILE_EMAIL_PATTERN = /^[^\s@,;<>"']+@[^\s@,;<>"']+\.[^\s@,;<>"']+$/;
+
 // Version label of the legal wording on the form (slip.html). Bump it (e.g. a date) whenever
 // the waiver, e-signature or other agreement text changes, and tag that commit in git, so every
 // response row can be matched to the exact text it was signed under.
@@ -13,7 +31,9 @@ var FORM_VERSION = '2026-10-26';
 
 // ---------------------------------------------------------------------------
 // PERMISSION SLIP (slip.html): trip config, submissions, and saved
-// parent/youth profiles, all for signed-in users. Routed from doPost in Code.gs.
+// youth/adult profiles, all for signed-in users. Routed from doPost in Code.gs.
+// A saved profile is the set of inputs marked data-profile in slip.html: slip.js sends
+// them in a saveProfile call, and each person's row is keyed by SLIP_KINDS[kind].nameColumn.
 // ---------------------------------------------------------------------------
 
 // Trip configuration for one trip (signed-in users only), or an error object when the
@@ -29,20 +49,20 @@ function permissionTripConfig_(tripId) {
 // Handles profile actions and slip submissions. Anything that isn't a
 // getProfile/saveProfile action is treated as a slip submission.
 function handlePermissionPost_(raw, data) {
-  // PROFILE ROUTES: the user ID comes ONLY from a verified Google ID token.
-  // Any googleUserId sent by the client is ignored.
+  // PROFILE ROUTES: the identity is the verified email from the sign-in token, never
+  // anything the client sends.
   if (data.action === 'getProfile') {
-    var readerId = verifyGoogleToken_(data.idToken);
-    if (!readerId) return jsonOut_({ error: 'unauthorized' });
-    return jsonOut_(getUserProfile(readerId) || {});
+    var reader = profileUser_(data.idToken);
+    if (!reader) return jsonOut_({ error: 'unauthorized' });
+    return jsonOut_({ status: 'success', profiles: getUserProfiles_(reader.email) });
   }
 
   if (data.action === 'saveProfile') {
-    var writerId = verifyGoogleToken_(data.idToken);
-    if (!writerId) { logEvent_('saveProfile unauthorized', tokenFailReason_); return jsonOut_({ status: 'error', message: 'unauthorized' }); }
-    saveProfileAndYouth_(writerId, sanitizeFields_(data.profileData || {}, []));
-    logEvent_('saveProfile ok', 'fields=' + Object.keys(data.profileData || {}).length);
-    return jsonOut_({ status: 'success' });
+    var writer = profileUser_(data.idToken);
+    if (!writer) { logEvent_('saveProfile unauthorized', 'no verified email'); return jsonOut_({ status: 'error', message: 'unauthorized' }); }
+    var saved = saveProfile_(data.kind, writer.email, data.profileData);
+    logEvent_('saveProfile ' + (saved.status === 'success' ? 'ok' : 'rejected'), data.kind + ' fields=' + Object.keys(data.profileData || {}).length + (saved.message ? ' ' + saved.message : ''));
+    return jsonOut_(saved);
   }
 
   if (data.action === 'slipTrip') {
@@ -57,7 +77,6 @@ function handlePermissionPost_(raw, data) {
   // Soft anti-spam: trim and flag, never reject.
   var flags = [];
   var submittedTripRevision = data._tripRevision;
-  var submittedIdToken = data._idToken;
   if (raw.length > MAX_PAYLOAD_CHARS) flags.push('Oversized payload');
   var honeypotFilled = !!(data[HONEYPOT_FIELD] && String(data[HONEYPOT_FIELD]).trim() !== '');
   if (honeypotFilled) flags.push('Honeypot filled');
@@ -66,9 +85,9 @@ function handlePermissionPost_(raw, data) {
   var submittedTripId = data._tripId;
   data = sanitizeFields_(data, flags);
 
-  var isAdult = String(data['Form Type']).toLowerCase() === 'adult';
-  if (!(isAdult ? data['Adult Name'] : data['Youth Name'])) flags.push('Missing name');
-  if (isAdult ? !data['Adult Signature'] : (!data['Parent Signature'] || !data['Youth Signature'])) flags.push('Missing signature');
+  var slipKind = SLIP_KINDS[String(data[SLIP_FORM_TYPE_COLUMN]).toLowerCase()] || SLIP_KINDS.youth;
+  if (!data[slipKind.nameColumn]) flags.push('Missing name');
+  if (!slipKind.signatureColumns.every(function(c) { return !!data[c]; })) flags.push('Missing signature');
 
   var ss = getSpreadsheet_('trips');
   var trip = getTripConfig_(ss, submittedTripId);
@@ -91,75 +110,25 @@ function handlePermissionPost_(raw, data) {
   if (!data['wordingHash']) flags.push('No wording hash');
   data['Flags'] = flags.join('; ');
 
-  var sheet = ss.getSheetByName('Responses') || ss.getSheets()[1];
+  var sheet = getOrCreateSheet_(ss, 'Responses', true);
 
-  var lastCol = sheet.getLastColumn();
-  var headers = [];
+  // Ensure "Timestamp" and all incoming field keys exist in row 1
+  var incomingKeys = Object.keys(data);
+  var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
 
-  // 1. Read existing exact headers from Row 1
-  if (sheet.getLastRow() > 0 && lastCol > 0) {
-    headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
-      return h.toString().trim();
-    });
-  }
-
-  // 2. Ensure "Timestamp" is in Column 1
-  if (headers.length === 0 || headers[0] === "") {
-    headers = ["Timestamp"];
-    sheet.getRange(1, 1, 1, 1).setValues([headers]).setFontWeight("bold");
-  }
-
-  // 3. Map exact header strings to column array indexes
   var headerMap = {};
-  headers.forEach(function(h, idx) {
-    if (h !== "") {
-      headerMap[h] = idx;
-    }
-  });
+  headers.forEach(function(h, idx) { headerMap[h.toLowerCase()] = idx; });
 
-  // 4. Add a column for any new incoming key
-  Object.keys(data).forEach(function(key) {
-    if (!(key in headerMap)) {
-      var newColIdx = headers.length;
-      sheet.getRange(1, newColIdx + 1).setValue(key).setFontWeight("bold");
-      headers.push(key);
-      headerMap[key] = newColIdx;
-    }
-  });
-
-  // 5. Build row array matching header order exactly
   var rowData = headers.map(function(header) {
-    if (header.toLowerCase() === "timestamp") return new Date();
-
-    return (data[header] !== undefined && data[header] !== null)
-      ? data[header]
-      : "";
+    if (header.toLowerCase() === 'timestamp') return new Date();
+    var val = data[header];
+    return (val !== undefined && val !== null) ? val : '';
   });
 
-  // 6. Append entry row
   sheet.appendRow(rowData);
 
-  // 7. Save the signed-in parent's profile (never blocks the submission).
-  if (!submittedIdToken) logEvent_('profile skipped', 'no _idToken in submission (not signed in, or old page cached)');
-  if (submittedIdToken && !honeypotFilled) {
-    try {
-      var profileId = verifyGoogleToken_(submittedIdToken);
-      if (!profileId) logEvent_('profile skipped: token rejected', tokenFailReason_);
-      if (profileId) {
-        var profileData = {};
-        Object.keys(data).forEach(function(k) {
-          if (k === 'Form Type' || k === 'tripId' || k === 'formVersion' || k === 'wordingHash' || k.toLowerCase().indexOf('signature') !== -1) return;
-          profileData[k] = data[k];
-        });
-        saveProfileAndYouth_(profileId, profileData);
-        logEvent_('profile saved', 'fields=' + Object.keys(profileData).length);
-      }
-    } catch (profErr) {
-      console.error('Profile save failed: ' + profErr);
-      logEvent_('profile save FAILED', profErr + ' | ' + (profErr && profErr.stack || ''));
-    }
-  }
-
+  // Saved profiles are not derived from the submission: slip.js sends the inputs marked
+  // data-profile in a separate saveProfile call, so a one-off question never lands in one.
   return jsonOut_({ status: "success" });
 }
 
@@ -223,97 +192,145 @@ function wordingHash_(raw) {
     .map(function(b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
 
-// Fetch saved profiles by verified user email (checking Authorized Emails)
-function getUserProfile(userEmail) {
-  try {
-    var ss = getSpreadsheet_('trips');
-    var sheet = ss.getSheetByName('Profiles');
-    if (!sheet || sheet.getLastRow() < 2) return null;
-    var values = sheet.getDataRange().getDisplayValues();
-    var headers = values[0].map(function(h) { return h.toString().trim(); });
-    var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
-    var emailLower = String(userEmail || '').trim().toLowerCase();
-    var youth = [];
-    for (var i = 1; i < values.length; i++) {
-      var r = values[i];
-      var authEmails = String(col(r, 'Authorized Emails') || '').toLowerCase().split(',').map(function(e) { return e.trim(); });
-      if (authEmails.indexOf(emailLower) !== -1 || authEmails.indexOf('*') !== -1) {
-        youth.push({
-          'Youth Name': col(r, 'Scout Name'),
-          'Birth Month': col(r, 'Birth Month'),
-          'Home Patrol': col(r, 'Home Patrol'),
-          'Gender': col(r, 'Gender'),
-          'Authorized Emails': col(r, 'Authorized Emails'),
-          'Youth Emergency Phone': col(r, 'Emergency Phone'),
-          'Youth Home Phone': col(r, 'Emergency Phone 2'),
-          'Medical Notes': col(r, 'Medical Notes')
-        });
-      }
-    }
-    return youth.length ? { youthProfiles: youth } : null;
-  } catch (err) {
-    console.error("Error fetching profile: " + err);
-    return null;
-  }
+// ---------------------------------------------------------------------------
+// SAVED PROFILES: one row per person on the tab SLIP_KINDS[kind].profileTab. The columns
+// are the `name`s of the slip.html inputs marked data-profile (the sheet gets a column the
+// first time it sees one), plus PROFILE_AUTH_COLUMN. A row is readable and updatable only
+// by the emails listed in it (or everyone, if a leader put * there). Saving under a name
+// that someone else's row already uses creates a separate row, so typing another
+// family's scout name can never expose or overwrite their profile.
+// A column whose header starts with an underscore is never sent to the browser (see
+// tableRows_), so leaders can keep their own notes on the sheet.
+// ---------------------------------------------------------------------------
+
+// The verified { email, ... } for a sign-in token, or null. Email sign-ins and Google
+// sign-ins both end up as a verified email (see Auth.gs).
+function profileUser_(idToken) {
+  var info = verifyGoogleTokenInfo_(idToken);
+  return info && info.emailVerified && info.email ? info : null;
 }
 
-function saveProfileAndYouth_(writerEmail, profileData) {
-  var ss = getSpreadsheet_('trips');
-  var sheet = ss.getSheetByName('Profiles') || ss.insertSheet('Profiles');
-  var scoutName = String(profileData['Youth Name'] || profileData['Scout Name'] || '').trim();
-  if (!scoutName) return;
+function normalizeName_(s) {
+  return String(s === undefined || s === null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+}
 
-  var headers = ['Scout Name', 'Birth Month', 'Home Patrol', 'Gender', 'Authorized Emails', 'Emergency Phone', 'Emergency Phone 2', 'Medical Notes'];
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+// True when `email` is in the comma-separated list, or the list contains *.
+function isAuthorized_(authValue, email) {
+  var want = String(email || '').trim().toLowerCase();
+  if (!want) return false;
+  return String(authValue || '').toLowerCase().split(',').some(function(e) {
+    e = e.trim();
+    return e === '*' || e === want;
+  });
+}
+
+function lowerIndexOf_(list, name) {
+  return list.map(function(h) { return String(h).trim().toLowerCase(); }).indexOf(String(name).trim().toLowerCase());
+}
+
+// Pure. Works out one profile save against the sheet's current contents.
+//   grid     the tab's display values, header row first ([] for an empty tab)
+//   spec     a SLIP_KINDS entry
+//   fields   the cleaned fields from the browser (cleanRecordFields_)
+// Returns { error } or { required (header names to ensure, in order), headers (the headers
+// once ensured), row (the cells to write, matching headers), rowIndex (index in grid of the
+// row to update, or -1 to append) }.
+function planProfileSave_(grid, spec, writerEmail, fields) {
+  var byLower = {};
+  Object.keys(fields).forEach(function(k) { byLower[k.toLowerCase()] = fields[k]; });
+  var name = String(byLower[spec.nameColumn.toLowerCase()] || '').replace(/\s+/g, ' ').trim();
+  if (!name) return { error: 'Enter a name before saving a profile.' };
+
+  var existing = grid && grid.length ? grid[0].map(function(h) { return String(h).trim(); }) : [];
+  // The name and authorization columns first, then the form's fields (each header once).
+  var required = [];
+  [spec.nameColumn, PROFILE_AUTH_COLUMN].concat(Object.keys(fields)).forEach(function(r) {
+    if (lowerIndexOf_(required, r) === -1) required.push(r);
+  });
+  var headers = existing.slice();
+  required.forEach(function(r) {
+    if (lowerIndexOf_(headers, r) === -1) headers.push(r);
+  });
+  if (headers.length > MAX_SHEET_COLUMNS) return { error: 'That profile sheet already has too many columns.' };
+
+  var nameIdx = lowerIndexOf_(existing, spec.nameColumn);
+  var authIdx = lowerIndexOf_(existing, PROFILE_AUTH_COLUMN);
+  var rowIndex = -1;
+  for (var i = 1; nameIdx !== -1 && authIdx !== -1 && grid && i < grid.length; i++) {
+    if (normalizeName_(grid[i][nameIdx]) === name.toLowerCase() && isAuthorized_(grid[i][authIdx], writerEmail)) { rowIndex = i; break; }
   }
+  var old = rowIndex === -1 ? [] : grid[rowIndex];
 
-  var values = sheet.getDataRange().getDisplayValues();
-  var sheetHeaders = values[0].map(function(h) { return h.toString().trim(); });
-  var nameCol = sheetHeaders.indexOf('Scout Name');
-  var authCol = sheetHeaders.indexOf('Authorized Emails');
-  var targetRow = -1;
-
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][nameCol]).trim().toLowerCase() === scoutName.toLowerCase()) {
-      targetRow = i + 1;
-      break;
-    }
-  }
-
-  var existingAuth = targetRow !== -1 ? String(values[targetRow - 1][authCol] || '') : writerEmail;
-  var authEmailsList = existingAuth.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
-  if (writerEmail && authEmailsList.map(function(e) { return e.toLowerCase(); }).indexOf(writerEmail.toLowerCase()) === -1) {
-    authEmailsList.push(writerEmail);
-  }
-  var extraAuth = String(profileData['Authorized Emails'] || '').split(',').map(function(e) { return e.trim(); }).filter(Boolean);
-  extraAuth.forEach(function(e) {
-    if (authEmailsList.map(function(item) { return item.toLowerCase(); }).indexOf(e.toLowerCase()) === -1) {
-      authEmailsList.push(e);
-    }
+  var auth = authIdx !== -1 && rowIndex !== -1 ? String(old[authIdx] || '').split(',').map(function(e) { return e.trim(); }).filter(Boolean) : [];
+  var extras = String(byLower[PROFILE_AUTH_COLUMN.toLowerCase()] || '').split(/[,;\s]+/).filter(function(e) {
+    return e !== '*' && PROFILE_EMAIL_PATTERN.test(e);
+  });
+  [writerEmail].concat(extras).forEach(function(e) {
+    if (e && lowerIndexOf_(auth, e) === -1) auth.push(e);
   });
 
-  var row = [
-    scoutName,
-    String(profileData['Birth Month'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Birth Month')] : '')).trim(),
-    String(profileData['Home Patrol'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Home Patrol')] : '')).trim(),
-    String(profileData['Gender'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Gender')] : '')).trim(),
-    authEmailsList.join(', '),
-    String(profileData['Youth Emergency Phone'] || profileData['Emergency Phone'] || '').trim(),
-    String(profileData['Youth Home Phone'] || profileData['Emergency Phone 2'] || '').trim(),
-    String(profileData['Medical Notes'] || '').trim()
-  ];
+  var row = headers.map(function(h, idx) {
+    var key = h.toLowerCase();
+    if (key === PROFILE_AUTH_COLUMN.toLowerCase()) return auth.join(', ');
+    if (key === spec.nameColumn.toLowerCase()) return name;
+    if (Object.prototype.hasOwnProperty.call(byLower, key)) return byLower[key];
+    return old[idx] === undefined || old[idx] === null ? '' : sheetCell_(old[idx], 0, true);
+  });
+  return { required: required, headers: headers, row: row, rowIndex: rowIndex };
+}
+
+// Pure. The profile rows `email` may read, as objects keyed by header (see tableRows_).
+function profileRowsFor_(grid, email) {
+  if (!grid || grid.length < 2) return [];
+  var authIdx = lowerIndexOf_(grid[0], PROFILE_AUTH_COLUMN);
+  if (authIdx === -1) return [];
+  var rows = [grid[0]].concat(grid.slice(1).filter(function(r) { return isAuthorized_(r[authIdx], email); }));
+  return tableRows_(rows, MAX_SHEET_COLUMNS);
+}
+
+function sheetGrid_(sheet) {
+  if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return [];
+  return sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getDisplayValues();
+}
+
+// { youth: [...], adult: [...] }: the saved profiles this email may use.
+function getUserProfiles_(email) {
+  var out = {};
+  Object.keys(SLIP_KINDS).forEach(function(kind) {
+    out[kind] = [];
+    try {
+      var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), SLIP_KINDS[kind].profileTab, false);
+      out[kind] = profileRowsFor_(sheetGrid_(sheet), email);
+    } catch (e) {
+      // no such tab yet: nothing saved
+    }
+  });
+  return out;
+}
+
+// Saves (creates or updates) the writer's profile of this kind. Returns the response object.
+function saveProfile_(kind, writerEmail, profileData) {
+  var spec = Object.prototype.hasOwnProperty.call(SLIP_KINDS, String(kind)) ? SLIP_KINDS[String(kind)] : null;
+  if (!spec) return { status: 'error', code: 'invalid', message: 'Unknown profile type.' };
+  var clean = cleanRecordFields_(profileData, [], { textCells: true });
+  if (clean.error) return { status: 'error', code: 'invalid', message: clean.error };
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    if (targetRow !== -1) {
-      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
-    } else {
-      sheet.appendRow(row);
-    }
+    var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.profileTab, true);
+    var plan = planProfileSave_(sheetGrid_(sheet), spec, writerEmail, clean.fields);
+    if (plan.error) return { status: 'error', code: 'invalid', message: plan.error };
+
+    var before = getSheetHeaders_(sheet);
+    ensureSheetHeaders_(sheet, plan.required);
+    var added = plan.headers.filter(function(h) { return lowerIndexOf_(before, h) === -1; });
+    if (added.length) logEvent_('columns added', sheet.getName() + ': ' + added.join(', '));
+
+    var rowNumber = plan.rowIndex === -1 ? sheet.getLastRow() + 1 : plan.rowIndex + 1;
+    sheet.getRange(rowNumber, 1, 1, plan.row.length).setNumberFormat('@').setValues([plan.row]);
   } finally {
     lock.releaseLock();
   }
+  return { status: 'success' };
 }

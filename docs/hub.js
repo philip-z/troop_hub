@@ -22,7 +22,7 @@
     }
     return d;
   }
-  const submitRecord = (kind, values) => api("hubSubmit", { kind, values });
+  const submitRecord = (kind, tripId, values, photo) => api("hubSubmit", { kind, tripId, values, photo });
 
   async function onSignIn(token, claims) {
     idToken = token;
@@ -122,16 +122,20 @@
     try { equipment = (await api("hubListEquipment")).items; renderEquipment(); }
     catch (e) { loaded.equipment = false; $("equipment-status").textContent = "Could not load equipment: " + e.message; }
   }
+  // Which sheet columns make up an item comes from data-* on #equipment in index.html.
   function renderEquipment() {
+    const cols = $("equipment").dataset;
+    const details = (cols.details || "").split(",").map((c) => c.trim()).filter(Boolean);
+    const shownCols = [cols.title, cols.count, ...details].filter(Boolean);
     const q = $("equipment-filter").value.trim().toLowerCase();
-    const shown = equipment.filter((i) => !q || [i.item, i.category, i.status, i.notes].join(" ").toLowerCase().includes(q));
+    const shown = equipment.filter((i) => !q || shownCols.map((c) => i[c] || "").join(" ").toLowerCase().includes(q));
     $("equipment-status").textContent = shown.length ? "" : (equipment.length ? "No equipment matches." : "No equipment listed yet.");
     const ul = $("equipment"); ul.textContent = "";
     shown.forEach((i) => {
       const li = document.createElement("li");
-      const h = document.createElement("strong"); h.textContent = i.item + (i.quantity ? " (" + i.quantity + ")" : "");
+      const h = document.createElement("strong"); h.textContent = (i[cols.title] || "") + (cols.count && i[cols.count] ? " (" + i[cols.count] + ")" : "");
       const d = document.createElement("div");
-      d.textContent = [i.category, i.status, i.notes].filter(Boolean).join(" · ");
+      d.textContent = details.map((c) => i[c]).filter(Boolean).join(" · ");
       li.append(h, d); ul.appendChild(li);
     });
   }
@@ -142,15 +146,20 @@
     try {
       recipes = (await api("hubListRecipes")).items;
       const sel = $("recipe-pick"); sel.length = 1;
-      recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r.name; sel.appendChild(o); });
+      recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r[sel.dataset.label] || ""; sel.appendChild(o); });
       $("recipe-pick-row").hidden = !recipes.length;
     } catch (e) { loaded.meals = false; $("recipe-pick-row").hidden = true; }
   }
   $("recipe-pick").onchange = (ev) => {
     const r = recipes[Number(ev.target.value)];
     if (!r) return;
-    const f = $("recipe-form").elements;
-    f.name.value = r.name; f.ingredients.value = r.ingredients; if (Number(r.serves) > 0) f.from.value = r.serves;
+    // Each input's data-recipe names the Recipes column that fills it (index.html).
+    Array.from($("recipe-form").elements).forEach((el) => {
+      const v = el.dataset.recipe && r[el.dataset.recipe];
+      if (v === undefined || v === "" || v === false) return;
+      if (el.type === "number" && !(Number(v) > 0)) return;
+      el.value = v;
+    });
   };
 
   async function loadTrips() {
@@ -163,9 +172,9 @@
     if (!trips.length) ul.textContent = "No trips yet.";
     trips.forEach((t) => {
       const li = document.createElement("li");
-      const h = document.createElement("strong"); h.textContent = t.name;
+      const h = document.createElement("strong"); h.textContent = t.tripTitle;
       const p = document.createElement("div");
-      p.textContent = [t.date, t.location, t.cost ? "$" + t.cost : ""].filter(Boolean).join(" · ");
+      p.textContent = [t.tripDates, t.tripLocation, t.tripCost ? "$" + t.tripCost : ""].filter(Boolean).join(" · ");
       const actions = document.createElement("div"); actions.className = "actions";
       li.append(h, p, actions);
       const button = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; actions.append(b); };
@@ -177,9 +186,9 @@
         actions.append(b);
       };
       if (t.acceptingResponses) {
-        navButton("Permission slip", "slip.html?trip=" + encodeURIComponent(t.id || t.tripId));
+        navButton("Permission slip", "slip.html?trip=" + encodeURIComponent(t.tripId));
       }
-      navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.id || t.tripId));
+      navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.tripId));
       if (t.acceptingReceipts) button("Submit receipt", () => openReceipt(t));
       if (perms.recordPayments) button("Record payment", () => openPayment(t));
       if (perms.recordReimbursements) button("Record reimbursement", () => openReimbursement(t));
@@ -232,20 +241,21 @@
       preview.hidden = !file;
       if (file) preview.src = URL.createObjectURL(file);
     };
-    dialogFlow("receipt-dialog", "receipt-form", "receipt-cancel", "Receipt: " + t.name, "receipt-title",
+    dialogFlow("receipt-dialog", "receipt-form", "receipt-cancel", "Receipt: " + t.tripTitle, "receipt-title",
       async (v) => {
-        const data = await photoToBase64(v.photo);
-        await submitRecord("receipt", { tripId: t.id, description: v.description, amount: v.amount, photo: data ? { data } : null });
+        const { photo, ...values } = v;
+        const data = await photoToBase64(photo);
+        await submitRecord("receipt", t.tripId, values, data ? { data } : null);
       });
   }
 
   function openPayment(t) {
-    dialogFlow("payment-dialog", "payment-form", "payment-cancel", "Payment: " + t.name, "payment-title",
-      (v) => submitRecord("payment", { tripId: t.id, scout: v.scout, amount: v.amount, method: v.method }));
+    dialogFlow("payment-dialog", "payment-form", "payment-cancel", "Payment: " + t.tripTitle, "payment-title",
+      (v) => submitRecord("payment", t.tripId, v));
   }
   function openReimbursement(t) {
-    dialogFlow("reimb-dialog", "reimb-form", "reimb-cancel", "Reimbursement: " + t.name, "reimb-title",
-      (v) => submitRecord("reimbursement", { tripId: t.id, payee: v.payee, amount: v.amount, notes: v.notes }));
+    dialogFlow("reimb-dialog", "reimb-form", "reimb-cancel", "Reimbursement: " + t.tripTitle, "reimb-title",
+      (v) => submitRecord("reimbursement", t.tripId, v));
   }
 
   // Meal planning (client-side only)

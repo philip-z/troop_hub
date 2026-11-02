@@ -1,7 +1,3 @@
-<<<<<<< Updated upstream
-# troop_hub
-A hub for digital management of a scout troop
-=======
 # Troop Hub
 
 Static web app (no build step): Google login, trips from a Google Sheet, permission slips,
@@ -21,17 +17,51 @@ The website lives in `docs/` (the only folder GitHub Pages publishes: Settings >
 
 ## Architecture
 The static pages talk only to the Google Apps Script web app in `apps-script/` (no direct Sheets API access).
+Hub records (receipts, payments, reimbursements) take their columns from the `name` attributes of the inputs in `index.html`; to add a field, add an input whose `name` is the header you want. The server fixes only each kind's tab, permission and server-filled columns (`HUB_RECORDS` in `apps-script/Hub.gs`, `SERVER_COLUMNS` in `apps-script/Sheets.gs`), and the browser can't send those names. New fields appear as new sheet columns automatically (logged as `columns added` in the Log tab, at most 60 columns per tab); field names must start with a letter or digit so they can't become formulas. Saved profiles work the same way: on `slip.html`, an input marked `data-profile` is remembered, and unmarked inputs (a one-off question like "Do you have a helmet?") are not. Each person-type section is a `fieldset[data-profile-kind]` (`youth`, `adult`) and its name input has `data-profile-key`; the input names become the columns of the `Youth Profiles` / `Adult Profiles` tabs. The script only knows the name column, `Authorized Emails` and the slip checks in `SLIP_KINDS` / `PROFILE_AUTH_COLUMN` (`apps-script/Slip.gs`). A profile row is readable and updatable only by the emails in its `Authorized Emails` cell (the signed-in writer is added automatically; a leader can type `*` in the sheet to share a row with everyone). Saving under a name another family's row already uses creates a separate row rather than touching theirs. A column whose header starts with `_` is never sent to the browser. The Trips sheet works the same way through `add-trip.html`, and the trip list, copy-from-a-previous-trip dropdown and slip all carry whole Trips rows keyed by column name (`tripTitle`, `tripDates`, ...).
 Users sign in with Google, or with an emailed one-time code (`Auth.gs`: 6-digit code via `MailApp`, 10-minute expiry, 5 tries, 3 requests per address per 10 minutes, then a signed 2-hour session token). Pages send the token with each request and the script verifies it,
 reads/writes the spreadsheets, and enforces leader-only actions using the `Leaders` sheet tab (column A emails). Nothing is served without a sign-in: trip details (including coordinator names) and slip submissions both require a valid token, and the web app's GET endpoint returns nothing.
 Email sign-in needs the Mail permission, and receipt photos need Drive access: after the first `npm run push`, run any function from the editor and approve the new scopes, then redeploy a new version. Receipt photos are shrunk in the browser, saved as JPEGs in a "Troop 58 Receipts" Drive folder (created on first use; set Script Property `RECEIPTS_FOLDER_ID` to use a different folder) and linked from the Receipts sheet. They are private to the script owner, so share that folder with whoever reconciles receipts. Gmail accounts can send about 100 emails/day (Workspace about 1,500); the script also caps itself at 60 codes/hour.
 
+## Adding or changing a field
+
+The design keeps column names out of the backend code: they come from input `name` attributes in the HTML forms. Here's how to add a field in each part of the app. The server only fills a few columns itself; everything else creates new sheet columns automatically when first submitted.
+
+### Hub records (receipts, payments, reimbursements)
+1. Open `docs/index.html` and find the dialog form for the kind you want (`receipt-dialog`, `payment-dialog` or `reimb-dialog`).
+2. Add an `<input name="Header you want">` inside it. The name becomes the sheet column header exactly as typed. `hub.js` sends all the form's values through unchanged (the receipt's file input `photo` is handled separately), so there is no `.gs` or `.js` change.
+3. The first submission creates the column (appended at the end of an existing tab) and logs `columns added` in the `Log(Enabled)` tab.
+4. Constraints: name must start with a letter or digit, be at most 80 characters, use only letters, digits, spaces, and `_ . ( ) / & # ' ? : , -`. At most 40 fields per submission and 60 columns per tab.
+5. Forbidden names (filled by the server): `Timestamp`, `Trip ID`, `Trip`, the email "recorded by" / "submitted by" column, and `Receipt URL` for receipts. Any form field with one of these names is rejected.
+6. A brand-new kind of record (not just a field) needs an entry in `HUB_RECORDS` in `apps-script/Hub.gs` (its tab and the Leaders permission it needs), plus a dialog in `index.html` and an open function in `hub.js`.
+
+### Trips
+1. Open `docs/add-trip.html` and add an `<input name="myNewColumn">` in the form.
+2. To show the new field on the permission slip, add a `<span id="myNewColumn"></span>` in `docs/slip.html` (slip.js fills spans whose id matches a column name).
+3. "Copy details from a previous trip" fills every named input that the earlier trip has a value for; add the attribute `data-no-copy` to an input to opt it out (the dates and month already have it).
+4. Which fields are required is decided only by the `required` attribute on the input; the server doesn't check.
+5. The script itself fills `tripId` and `customDepartureHtml` (built from `departureDetails` and the `departureOptions` box), so the browser can't send those. It also turns the two checkboxes `acceptingResponses` / `acceptingReceipts` into the `TRUE`/`FALSE` flags. `tripMonth`, `departureOptions` and those checkboxes are read by the script but are not columns themselves.
+6. Never add a private column to the Trips sheet: every Trips column is shown to any signed-in user.
+
+### Profiles (saved youth and adult info)
+1. Open `docs/slip.html` and find the fieldset for your person type (`data-profile-kind="youth"` or `data-profile-kind="adult"`).
+2. To remember a new answer, add `data-profile` to its input. No `.gs` change is needed; the input's `name` becomes a column in the `Youth Profiles` or `Adult Profiles` tab the first time it is saved. The person's name input is the one with `data-profile-key`.
+3. For a one-off question (e.g., "Do you have a helmet?"), add the input without `data-profile`. It is asked on the slip and becomes a column in the `Responses` sheet, but it is not saved to the profile.
+4. A profile row can only be read or updated by the emails in its `Authorized Emails` cell (a leader can type `*` there in the sheet to share a row with everyone).
+5. A column header starting with `_` is never sent to the browser (useful for leader-only notes inside the sheet).
+6. If the legal wording on `slip.html` changes, bump `FORM_VERSION` in `apps-script/Slip.gs` and tag that commit in git, so every response row can be matched to the exact text it was signed under.
+
+### Equipment and recipes lists
+1. Edit the Equipment or Recipes tab directly in the sheet (no form to change). Every column is shown to any signed-in user, case-sensitive, exactly as typed.
+2. To keep a column private, start its header with an underscore (e.g., `_supplier`).
+3. In `docs/index.html`, use `data-title`, `data-count`, `data-details` on the `#equipment` list to choose what to display; use `data-label` on the recipe dropdown and `data-recipe="<column>"` on recipe form inputs.
+
 ## Setup
 1. Create a Google Cloud OAuth client ID (Web); add your site origin as an authorized JavaScript origin.
 2. Three spreadsheets (the script is standalone and opens each by ID; see `apps-script/Sheets.gs`). Create them, then put each ID (the long string in the sheet's URL) in Script Properties in step 3: `TRIPS_SHEET_ID`, `EQUIPMENT_SHEET_ID`, `RECIPES_SHEET_ID`. The account that deploys the web app needs edit access to all three.
-   - **Trips spreadsheet** (`TRIPS_SHEET_ID`): tabs `Trips`, `Leaders`; `Responses`, `Profiles`, `Youth Profiles`, `Receipts`, `Payments`, `Reimbursements` are created or extended automatically. Add trips from `add-trip.html`; columns are listed in `apps-script/Leaders.gs`. Each trip has a `tripId` (`YYYYMMNN`: year, month, 2-digit sequence within the month, e.g. `20261101`; generated from the "Trip month" chosen on the add-trip page) plus `acceptingResponses` (permission slip) and `acceptingReceipts` flags (`TRUE`/`FALSE`); edit them in the sheet to open or close a trip. The hub only shows a trip's buttons for the forms it accepts, and the server enforces the same flags.
+   - **Trips spreadsheet** (`TRIPS_SHEET_ID`): tabs `Trips`, `Leaders`; `Responses`, `Youth Profiles`, `Adult Profiles`, `Receipts`, `Payments`, `Reimbursements` are created or extended automatically. Add trips from `add-trip.html`; the columns are the `name`s of the inputs in `add-trip.html` (a new input becomes a new column; the script only fills `tripId`, `customDepartureHtml` and the two `accepting...` flags, see `apps-script/Leaders.gs`). To show a new column on the permission slip, add a `<span id="<column>">` to `slip.html`. Each trip has a `tripId` (`YYYYMMNN`: year, month, 2-digit sequence within the month, e.g. `20261101`; generated from the "Trip month" chosen on the add-trip page) plus `acceptingResponses` (permission slip) and `acceptingReceipts` flags (`TRUE`/`FALSE`); edit them in the sheet to open or close a trip. The hub only shows a trip's buttons for the forms it accepts, and the server enforces the same flags.
    - **Equipment spreadsheet** (`EQUIPMENT_SHEET_ID`): a tab named `Equipment` with headers `item`, `category`, `quantity`, `status`, `notes`. Shown (searchable, read-only) on the hub's Equipment tab to any signed-in user. Edit it in the sheet.
    - **Recipes spreadsheet** (`RECIPES_SHEET_ID`): a tab named `Recipes` with headers `name`, `serves`, `ingredients` (one per line inside the cell, e.g. `1 1/2 cups flour`), `notes`. Offered as "Start from a troop recipe" on the Meal planning tab. Edit it in the sheet.
-   - Column order doesn't matter and extra columns are ignored. If the equipment or recipes ID isn't set, those tabs just say so; nothing else is affected. Run `runDiagnostics` from the editor to check all three.
+   - Column order doesn't matter. **Every column is sent to any signed-in user** under its header exactly as typed (case-sensitive; the page picks the ones it uses via `data-*` attributes in `index.html`), so start a header with an underscore (e.g. `_supplier`) to keep a column private. If the equipment or recipes ID isn't set, those tabs just say so; nothing else is affected. Run `runDiagnostics` from the editor to check all three.
 
    The `Leaders` sheet: row 1 headers `email`, `addTrips`, `recordPayments`, `recordReimbursements`, then one row per leader with checkboxes (or `TRUE`/`yes`/`1`) in the permission columns. A blank cell or missing column means no. Each permission gates both the button on the hub and the server action (`not_allowed` otherwise). A legacy sheet with only emails in column A (no permission columns) gives every listed leader all three permissions until you add the columns.
 3. Push the backend from the command line (manual, not CI):
@@ -45,5 +75,4 @@ Email sign-in needs the Mail permission, and receipt photos need Drive access: a
 6. Deploy the static files: push to GitHub and enable Pages from `main` / `/docs` (or upload `docs/` to any static host). Add the Pages origin (e.g. `https://<user>.github.io`) to the OAuth client's authorized JavaScript origins.
 
 ## Tests
-`npm test`
->>>>>>> Stashed changes
+`npm test`. It also loads the real `.gs` files in Node (`test/gs.test.js`, via `dev/gs-loader.js`); the dev mock uses the same loader for hub records.

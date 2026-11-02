@@ -74,6 +74,7 @@ document.addEventListener('DOMContentLoaded', function() {
     formType.addEventListener('change', function() {
       updatePrintHeader();
       toggleFormType();
+      autofillActiveProfile();
     });
   }
 
@@ -87,14 +88,10 @@ document.addEventListener('DOMContentLoaded', function() {
     form.addEventListener('input', saveFormDraft);
     form.addEventListener('change', saveFormDraft);
     form.addEventListener('submit', handleFormSubmit);
-    const scoutNameInput = document.getElementById('scoutName');
-    if (scoutNameInput) {
-      scoutNameInput.addEventListener('change', e => {
-        const name = e.target.value.trim().toLowerCase();
-        const found = (window.userYouthProfiles || []).find(s => String(s['Youth Name'] || s['Name'] || '').trim().toLowerCase() === name);
-        if (found) fillScoutProfile(found);
-      });
-    }
+    // Typing a saved person's name fills in the rest of their profile (see section 8).
+    document.querySelectorAll('[data-profile-key]').forEach(input => {
+      input.addEventListener('change', () => fillSavedProfile(profileKindOf(input), input.value));
+    });
   }
 
   const signOutBtn = document.getElementById('signOutBtn');
@@ -257,7 +254,7 @@ function applyTripDetails(data) {
 function cachedTripDetails() {
   try {
     const trips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-    const trip = trips.find(t => t && t.id === TRIP_ID);
+    const trip = trips.find(t => t && t.tripId === TRIP_ID);
     return trip && trip.slip ? trip.slip : null;
   } catch (e) { return null; }
 }
@@ -376,9 +373,6 @@ function populateFormFields(form, data, options = { skipSignatures: false }) {
     });
   });
 
-  if (data.youthProfiles) {
-    renderYouthSelector(data.youthProfiles);
-  }
   if (window.refreshVehicleModels) window.refreshVehicleModels();
 }
 
@@ -467,7 +461,7 @@ function handleFormSubmit(e) {
     setSubmitting(false); // clear before alert(), which blocks the page
     if (response.status === 'success') {
       alert("Permission slip submitted successfully! Thank you.");
-      if (window.currentIdToken) saveUserProfile(); // also cache locally
+      if (window.currentIdToken) saveUserProfile();
       localStorage.removeItem(DRAFT_KEY);
       form.reset();
       toggleFormType();
@@ -622,170 +616,149 @@ function setSignedInUI(label) {
 function clearSignedInState() {
   window.currentIdToken = null;
   window.currentUserGoogleId = null;
+  setUserProfiles({});
   setSignedInUI(null);
 }
 
+// Saved profiles. In slip.html, each person-type section is a fieldset[data-profile-kind]
+// (youth, adult), its name input has data-profile-key, and every input to remember has
+// data-profile. The input names are the profile's fields, so nothing here (or on the
+// server) lists them: to remember another answer, add data-profile to its input; to ask a
+// one-off question, just leave it off.
+
+window.userProfiles = {};   // kind -> [profile objects keyed by input name]
+
+function profileSection(kind) {
+  return document.querySelector('[data-profile-kind="' + kind + '"]');
+}
+
+function profileKindOf(el) {
+  const section = el.closest('[data-profile-kind]');
+  return section ? section.dataset.profileKind : '';
+}
+
+function profileKeyInput(kind) {
+  const section = profileSection(kind);
+  return section ? section.querySelector('[data-profile-key]') : null;
+}
+
+function activeProfileKind() {
+  const section = document.querySelector('[data-profile-kind]:not([disabled])');
+  return section ? section.dataset.profileKind : '';
+}
+
+function profileNameOf(kind, profile) {
+  const key = profileKeyInput(kind);
+  return key ? String(profile[key.name] || '').trim() : '';
+}
+
+function sameName(a, b) {
+  return String(a).replace(/\s+/g, ' ').trim().toLowerCase() === String(b).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function profilesCacheKey() {
+  return 'troop58_profiles_' + window.currentUserGoogleId;
+}
+
+// Replaces the known profiles and refreshes each name input's suggestion list.
+function setUserProfiles(profiles) {
+  window.userProfiles = {};
+  document.querySelectorAll('[data-profile-kind]').forEach(section => {
+    const kind = section.dataset.profileKind;
+    const list = Array.isArray(profiles && profiles[kind]) ? profiles[kind] : [];
+    window.userProfiles[kind] = list;
+    const key = profileKeyInput(kind);
+    const datalist = key && key.list;
+    if (!datalist) return;
+    datalist.replaceChildren();
+    list.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = profileNameOf(kind, p);
+      datalist.appendChild(opt);
+    });
+  });
+}
+
+// Fills the section's data-profile inputs from a saved profile. An input the profile has no
+// value for is cleared, so nothing is left over from someone else.
+function fillProfile(kind, profile) {
+  const section = profileSection(kind);
+  if (!section || !profile) return;
+  section.querySelectorAll('[data-profile]').forEach(el => {
+    const saved = profile[el.name] != null ? String(profile[el.name]) : '';
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = el.value === saved;
+    else el.value = el.type === 'tel' ? formatPhone(saved) : saved;
+  });
+  if (window.refreshVehicleModels) window.refreshVehicleModels();
+  saveFormDraft();
+}
+
+function fillSavedProfile(kind, name) {
+  const found = (window.userProfiles[kind] || []).find(p => sameName(profileNameOf(kind, p), name));
+  if (found) fillProfile(kind, found);
+}
+
+// When the visible section's name is still empty, start from the first saved profile.
+function autofillActiveProfile() {
+  const kind = activeProfileKind();
+  const key = kind && profileKeyInput(kind);
+  const first = kind && (window.userProfiles[kind] || [])[0];
+  if (key && first && !key.value.trim()) fillProfile(kind, first);
+}
+
+// Shows the copy kept on this device straight away, then replaces it with the server's.
 function loadUserProfile(googleUserId) {
   if (!googleUserId) return;
-  const cacheKey = `troop58_scouts_${googleUserId}`;
-  let scouts = [];
-  try { scouts = JSON.parse(localStorage.getItem(cacheKey)) || []; } catch (e) {}
-  window.userYouthProfiles = scouts;
-  updateScoutDatalist(scouts);
+  const cacheKey = profilesCacheKey();
+  let cached = {};
+  try { cached = JSON.parse(localStorage.getItem(cacheKey)) || {}; } catch (e) {}
+  setUserProfiles(cached);
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({ action: 'getProfile', idToken: window.currentIdToken })
   })
     .then(res => res.json())
-    .then(profileData => {
-      if (profileData && !profileData.error) {
-        if (Array.isArray(profileData.youthProfiles) && profileData.youthProfiles.length > 0) {
-          window.userYouthProfiles = profileData.youthProfiles;
-          localStorage.setItem(cacheKey, JSON.stringify(profileData.youthProfiles));
-          updateScoutDatalist(profileData.youthProfiles);
-          // Auto-fill first scout if name is empty
-          const scoutNameInput = document.getElementById('scoutName');
-          if (scoutNameInput && !scoutNameInput.value.trim()) {
-            fillScoutProfile(profileData.youthProfiles[0]);
-          }
-        }
-      }
+    .then(r => {
+      if (!r || r.error || !r.profiles) return;
+      setUserProfiles(r.profiles);
+      localStorage.setItem(cacheKey, JSON.stringify(window.userProfiles));
+      autofillActiveProfile();
     })
     .catch(err => console.log('Profile fetch error:', err));
 }
 
-function updateScoutDatalist(scouts) {
-  const list = document.getElementById('scoutNamesList');
-  if (!list) return;
-  list.innerHTML = '';
-  scouts.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s['Youth Name'] || s['Name'] || '';
-    list.appendChild(opt);
-  });
-}
-
-function fillScoutProfile(scout) {
-  if (!scout) return;
-  document.getElementById('scoutName').value = scout['Youth Name'] || scout['Name'] || '';
-  if (document.getElementById('scoutGender')) document.getElementById('scoutGender').value = scout['Gender'] || '';
-  if (document.getElementById('birthYear')) document.getElementById('birthYear').value = scout['Birth Year'] || '';
-  if (document.getElementById('birthMonth')) document.getElementById('birthMonth').value = scout['Birth Month'] || '';
-  if (document.getElementById('scoutPatrol')) document.getElementById('scoutPatrol').value = scout['Patrol'] || scout['Home Patrol'] || '';
-  if (document.getElementById('scoutRank')) document.getElementById('scoutRank').value = scout['Rank'] || '';
-  if (document.getElementById('scoutPosition')) document.getElementById('scoutPosition').value = scout['Position'] || '';
-  if (document.getElementById('parentEmails')) document.getElementById('parentEmails').value = scout['Authorized Emails'] || '';
-  if (document.getElementById('emergencyContact')) document.getElementById('emergencyContact').value = scout['Youth Emergency Phone'] || scout['Emergency Phone'] || '';
-  if (document.getElementById('medicalNotes')) document.getElementById('medicalNotes').value = scout['Medical Notes'] || '';
-}
-
+// Saves the visible section's data-profile inputs as that person's profile, on this device
+// and on the server. (The server decides whether it updates an existing row or adds one.)
 function saveUserProfile() {
-  const googleUserId = window.currentUserGoogleId;
-  if (!googleUserId || !window.currentIdToken) return;
+  if (!window.currentUserGoogleId || !window.currentIdToken) return;
+  const kind = activeProfileKind();
+  const section = kind && profileSection(kind);
+  const key = kind && profileKeyInput(kind);
+  if (!section || !key) return;
+
   const form = document.getElementById('permissionForm');
-  const profileData = extractFormData(form, { skipSignatures: true });
-  delete profileData['Form Type'];
-  delete profileData['website_url'];
+  const formData = new FormData(form);
+  const profileData = {};
+  new Set(Array.from(section.querySelectorAll('[data-profile]')).map(el => el.name)).forEach(name => {
+    const values = formData.getAll(name);
+    if (values.length) profileData[name] = values.length > 1 ? values : values[0];
+  });
+  const name = profileNameOf(kind, profileData);
+  if (!name) return;
 
-  const cacheKey = `troop58_scouts_${googleUserId}`;
-  let scouts = [];
-  try { scouts = JSON.parse(localStorage.getItem(cacheKey)) || []; } catch (e) {}
+  const list = (window.userProfiles[kind] || []).slice();
+  const i = list.findIndex(p => sameName(profileNameOf(kind, p), name));
+  if (i >= 0) list[i] = Object.assign({}, list[i], profileData); else list.push(profileData);
+  const profiles = Object.assign({}, window.userProfiles, { [kind]: list });
+  setUserProfiles(profiles);
+  localStorage.setItem(profilesCacheKey(), JSON.stringify(profiles));
 
-  const scoutName = String(profileData['Youth Name'] || '').trim();
-  if (!scoutName) return;
-
-  const existingIdx = scouts.findIndex(s => String(s['Youth Name'] || s['Name'] || '').trim().toLowerCase() === scoutName.toLowerCase());
-  if (existingIdx >= 0) {
-    scouts[existingIdx] = Object.assign(scouts[existingIdx], profileData);
-  } else {
-    scouts.push(profileData);
-  }
-  localStorage.setItem(cacheKey, JSON.stringify(scouts));
-  updateScoutDatalist(scouts);
-
-  // Send to server
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, profileData: { 'Youth Name': scoutName, youthProfiles: scouts } })
-  }).catch(err => console.error('Save profile error:', err));
-}
-
-function populateModalProfileDropdown() {
-  const sel = document.getElementById('modalProfileSelect');
-  if (!sel) return;
-  sel.length = 3; // Keep default, add_scout, add_adult
-  window.userProfilesMap = {};
-
-  (window.userYouthProfiles || []).forEach((y, idx) => {
-    const key = 'youth_' + idx;
-    window.userProfilesMap[key] = Object.assign({ kind: 'youth' }, y);
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = (y['Youth Name'] || 'Scout') + ' (Scout)';
-    sel.insertBefore(opt, sel.querySelector('option[value="add_scout"]'));
-  });
-
-  // If adult profile exists in local cache or profiles
-  if (window.userAdultProfile) {
-    const key = 'adult_0';
-    window.userProfilesMap[key] = Object.assign({ kind: 'adult' }, window.userAdultProfile);
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = (window.userAdultProfile['Adult Name'] || window.userAdultProfile['Name'] || 'Adult') + ' (Adult)';
-    sel.insertBefore(opt, sel.querySelector('option[value="add_scout"]'));
-  }
-
-  sel.value = '';
-  document.getElementById('modalProfileKind').value = 'youth';
-  if (document.getElementById('youthExtraFields')) document.getElementById('youthExtraFields').hidden = false;
-  if (document.getElementById('adultExtraFields')) document.getElementById('adultExtraFields').hidden = true;
-
-  document.getElementById('modalScoutName').value = '';
-  document.getElementById('modalGender').value = '';
-  document.getElementById('modalBirthMonth').value = '';
-  document.getElementById('modalHomePatrol').value = '';
-  document.getElementById('modalAuthorizedEmails').value = '';
-  document.getElementById('modalEmergencyPhone').value = '';
-  document.getElementById('modalMedicalNotes').value = '';
-}
-
-function renderYouthSelector(youthProfiles) {
-  const container = document.getElementById('scoutSelectorContainer');
-  const selector = document.getElementById('scoutSelector');
-  if (!container || !selector) return;
-
-  window.userYouthProfiles = youthProfiles || [];
-  container.hidden = window.userYouthProfiles.length === 0;
-
-  selector.querySelectorAll('option[data-scout]').forEach(o => o.remove());
-  const addNew = selector.querySelector('option[value="new"]');
-  window.userYouthProfiles.forEach((y, idx) => {
-    const opt = document.createElement('option');
-    opt.value = idx;
-    opt.dataset.scout = '1';
-    opt.textContent = y['Youth Name'] || '';
-    selector.insertBefore(opt, addNew);
-  });
-
-  if (window.userYouthProfiles.length > 0 && (selector.value === '' || selector.value === 'new')) {
-    selector.value = '0';
-    onScoutSelected(0);
-  }
-}
-
-function onScoutSelected(selectedIndex) {
-  const form = document.getElementById('permissionForm');
-  const youthFields = form.querySelectorAll('#youthSection [name^="Youth "]');
-  const selectedScout = (selectedIndex === '' || selectedIndex === 'new')
-    ? null : window.userYouthProfiles[selectedIndex];
-  if (selectedIndex !== '' && selectedIndex !== 'new' && !selectedScout) return;
-
-  youthFields.forEach(el => {
-    if (isSignatureOrDateField(el.name)) return;
-    const saved = selectedScout && selectedScout[el.name] != null ? selectedScout[el.name] : '';
-    el.value = el.type === 'tel' ? formatPhone(saved) : saved;
-  });
-
-  saveFormDraft();
+    body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, kind, profileData })
+  })
+    .then(res => res.json())
+    .then(r => { if (r.status !== 'success') console.error('Save profile:', r.message); })
+    .catch(err => console.error('Save profile error:', err));
 }

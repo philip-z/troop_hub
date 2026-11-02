@@ -77,12 +77,16 @@ function invalidateHubCache() {
   ['troop58_session', 'troop58_session_token', 'troop58_trips'].forEach(k => sessionStorage.removeItem(k));
 }
 
-const COPY_FIELDS = ['tripTitle', 'tripLocation', 'departureDetails', 'departureOptions', 'returnDetails', 'tripCost', 'tripCoordinator', 'tripUniform'];
-
+// Fills every named input that the template has a value for, except those marked
+// data-no-copy in add-trip.html (dates, month) and checkboxes. The template's keys are the
+// Trips column names, which are the inputs' names.
 function copyFromTrip() {
   const t = templates[Number(document.getElementById('copyFrom').value)];
   if (!t) return;
-  COPY_FIELDS.forEach(f => { document.getElementById(f).value = t[f] || ''; });
+  Array.from(document.getElementById('tripForm').elements).forEach(el => {
+    if (!el.name || el.type === 'checkbox' || el.dataset.noCopy !== undefined) return;
+    if (t[el.name] !== undefined) el.value = t[el.name];
+  });
   document.getElementById('tripDates').value = '';
   document.getElementById('tripMonth').focus();
   setMessage('Copied from "' + t.tripTitle + '". Enter the new month and dates.', false);
@@ -102,8 +106,7 @@ function submitTrip(e) {
 
   const form = e.target;
   const btn = document.getElementById('addTripBtn');
-  const payload = { action: 'addTrip', idToken: leaderIdToken };
-  new FormData(form).forEach((value, key) => { payload[key] = value; });
+  const payload = { action: 'addTrip', idToken: leaderIdToken, values: Object.fromEntries(new FormData(form)) };
 
   btn.disabled = true;
   setMessage('Adding trip...', false);

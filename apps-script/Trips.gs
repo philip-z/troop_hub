@@ -26,7 +26,12 @@ function nextTripId_(month, existingIds) {
 // parent had the form open are detected. It is computed here, not a sheet column.
 function getTripConfig_(ss, tripId) {
   var id = String(tripId === undefined || tripId === null ? '' : tripId).trim();
-  var sheet = ss.getSheetByName('Trips');
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(ss, 'Trips', false);
+  } catch (e) {
+    return null;
+  }
   if (!id || !sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return null;
 
   var values = sheet.getDataRange().getValues();
@@ -41,10 +46,26 @@ function getTripConfig_(ss, tripId) {
   return null;
 }
 
+// One Trips row as an object keyed by header (blank headers skipped).
+function tripRowObject_(headers, row) {
+  var obj = {};
+  headers.forEach(function(h, j) { if (h !== '') obj[h] = row[j]; });
+  return obj;
+}
+
+// The hub's list entry for a Trips row (an object keyed by header, display values): every
+// column, with the two flags the hub acts on turned into booleans.
+function tripSummary_(row) {
+  var t = {};
+  Object.keys(row).forEach(function(k) { t[k] = row[k]; });
+  t.acceptingResponses = isTruthy_(row.acceptingResponses);
+  t.acceptingReceipts = isTruthy_(row.acceptingReceipts);
+  return t;
+}
+
 // Builds the config object (keyed by header, plus _tripRevision) for one Trips row.
 function tripRowConfig_(headers, row) {
-  var config = {};
-  headers.forEach(function(h, j) { if (h !== '') config[h] = row[j]; });
+  var config = tripRowObject_(headers, row);
   config._tripRevision = Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify([headers, row]), Utilities.Charset.UTF_8)
   ).replace(/=+$/, '');
