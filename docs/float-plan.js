@@ -31,11 +31,11 @@
     // 1. Load trip metadata instantly from sessionStorage cache
     try {
       const cachedTrips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-      const trip = cachedTrips.find(t => String(t.tripId || t.id) === String(TRIP_ID));
+      const trip = cachedTrips.find(t => String(t.tripId) === String(TRIP_ID));
       if (trip) {
-        $("planTripTitle").textContent = trip.name || trip.tripTitle;
-        $("planTripDate").textContent = trip.date || trip.tripDates;
-        $("planTripLocation").textContent = trip.location || trip.tripLocation;
+        $("planTripTitle").textContent = trip.tripTitle;
+        $("planTripDate").textContent = trip.tripDates;
+        $("planTripLocation").textContent = trip.tripLocation;
       }
     } catch (e) {}
 

@@ -257,7 +257,7 @@ function applyTripDetails(data) {
 function cachedTripDetails() {
   try {
     const trips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-    const trip = trips.find(t => t && t.id === TRIP_ID);
+    const trip = trips.find(t => t && t.tripId === TRIP_ID);
     return trip && trip.slip ? trip.slip : null;
   } catch (e) { return null; }
 }

@@ -6,12 +6,21 @@
 // the add-trip.html page itself is public.
 // ---------------------------------------------------------------------------
 
-// Must match the Trips sheet headers. The slip page shows every Trips column to any
-// signed-in user, so NEVER add private columns (like who added a trip) to that sheet.
-var TRIP_COLUMNS = ['tripId', 'tripTitle', 'tripLocation', 'tripDates', 'departureDetails',
-                    'returnDetails', 'tripCost', 'tripCoordinator', 'tripUniform',
-                    'customDepartureHtml', 'acceptingResponses', 'acceptingReceipts'];
-var TRIP_REQUIRED = ['tripTitle', 'tripLocation', 'tripDates'];
+// The Trips columns are the `name`s of the inputs in add-trip.html (see appendRecord_ in
+// Sheets.gs), so a new trip detail needs only a new input there (and a span with the same
+// id in slip.html to show it). The slip page shows every Trips column to any signed-in
+// user, so NEVER add private columns (like who added a trip) to that sheet.
+// Which fields are required is the form's job (`required` attributes); leaders are the
+// only ones who can submit it.
+//
+// The exceptions, because this script does something with them:
+//   TRIP_SERVER_COLUMNS  filled here, so the browser may not send them: the generated
+//                        tripId, customDepartureHtml (built from departureDetails and
+//                        the departureOptions input) and the two accepting flags.
+//   TRIP_FORM_ONLY       inputs that are read here but are not columns themselves.
+//   departureDetails     feeds customDepartureHtml; tripTitle and tripDates go in Trip Log.
+var TRIP_SERVER_COLUMNS = ['tripId', 'customDepartureHtml', 'acceptingResponses', 'acceptingReceipts'];
+var TRIP_FORM_ONLY = ['tripMonth', 'departureOptions', 'acceptingResponses', 'acceptingReceipts'];
 var TRIP_FIELD_MAX = 500;
 var MAX_DEPARTURE_OPTIONS = 20;
 var DEPARTURE_OPTION_MAX = 100;
@@ -62,7 +71,12 @@ var LEADER_PERMISSIONS = ['addTrips', 'recordPayments', 'recordReimbursements'];
 // email, or null when the email is not on the Leaders sheet.
 function getLeaderPermissions_(email) {
   if (!email) return null;
-  var sheet = getSpreadsheet_('trips').getSheetByName('Leaders');
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), 'Leaders', false);
+  } catch (e) {
+    return null;
+  }
   if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return null;
   var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
   var hasHeader = String(values[0][0]).trim().toLowerCase() === 'email';
@@ -131,25 +145,65 @@ function listTripTemplates_(data) {
   return { status: 'success', trips: tripTemplates_() };
 }
 
+// One Trips row (object keyed by header) as a template for the add-trip form: every
+// column, with the departure options as plain text in departureOptions (the form's
+// textarea) instead of the generated customDepartureHtml. add-trip.html decides which
+// inputs are copied (see data-no-copy there).
+function tripTemplateFromRow_(row) {
+  var t = {};
+  Object.keys(row).forEach(function(k) { t[k] = row[k]; });
+  t.departureOptions = parseDepartureOptions_(row.customDepartureHtml);
+  delete t.customDepartureHtml;
+  return t;
+}
+
 // No permission check here: callers must have verified addTrips already.
 function tripTemplates_() {
-  var sheet = getSpreadsheet_('trips').getSheetByName('Trips');
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), 'Trips', false);
+  } catch (e) {
+    return [];
+  }
   if (!sheet || sheet.getLastRow() < 2) return [];
   var values = sheet.getDataRange().getDisplayValues();
   var headers = values[0].map(function(h) { return h.toString().trim(); });
-  var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
+  var col = createColumnGetter_(headers);
   return values.slice(1)
     .filter(function(r) { return String(col(r, 'tripId')).trim() !== ''; })
-    .map(function(r) {
-      return {
-        id: col(r, 'tripId'), tripTitle: col(r, 'tripTitle'), tripDates: col(r, 'tripDates'),
-        tripLocation: col(r, 'tripLocation'), departureDetails: col(r, 'departureDetails'),
-        departureOptions: parseDepartureOptions_(col(r, 'customDepartureHtml')),
-        returnDetails: col(r, 'returnDetails'), tripCost: col(r, 'tripCost'),
-        tripCoordinator: col(r, 'tripCoordinator'), tripUniform: col(r, 'tripUniform')
-      };
-    })
-    .sort(function(a, b) { return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; });
+    .map(function(r) { return { id: String(col(r, 'tripId')), trip: tripTemplateFromRow_(tripRowObject_(headers, r)) }; })
+    .sort(function(a, b) { return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; })
+    .map(function(p) { return p.trip; });
+}
+
+// Turns the add-trip form's values (input name -> value) into what gets written, or { error }.
+// Returns { fields (the form's columns), month (YYYY-MM), after (the server-filled columns
+// that go behind them) }. The caller adds the generated tripId. Pure: no sheet access.
+function buildTripRecord_(input) {
+  input = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  var month = String(input.tripMonth || '').trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return { error: 'Choose the trip month.' };
+
+  var options = String(input.departureOptions || '').split(/\r?\n/)
+    .map(function(s) { return s.replace(/\s+/g, ' ').trim().substring(0, DEPARTURE_OPTION_MAX); })
+    .filter(function(s) { return s !== ''; })
+    .slice(0, MAX_DEPARTURE_OPTIONS);
+
+  var raw = {};
+  Object.keys(input).forEach(function(k) {
+    if (TRIP_FORM_ONLY.indexOf(k) !== -1) return;
+    raw[k] = typeof input[k] === 'string' ? cleanTripText_(input[k]) : input[k];
+  });
+  // Plain-text cells, so Sheets doesn't turn "Nov 14-16" or "$25" into dates/numbers.
+  var clean = cleanRecordFields_(raw, TRIP_SERVER_COLUMNS, { textCells: true });
+  if (clean.error) return { error: clean.error };
+
+  // Raw HTML from the client is never accepted; it is always generated here.
+  var after = {};
+  after.customDepartureHtml = buildDepartureHtml_(clean.fields.departureDetails || '', options);
+  after.acceptingResponses = isTruthy_(input.acceptingResponses) ? 'TRUE' : 'FALSE';
+  after.acceptingReceipts = isTruthy_(input.acceptingReceipts) ? 'TRUE' : 'FALSE';
+  return { fields: clean.fields, month: month, after: after };
 }
 
 function addTrip_(data) {
@@ -159,56 +213,32 @@ function addTrip_(data) {
     return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to add trips. Ask a leader to tick addTrips for you on the Leaders sheet.' };
   }
 
-  var trip = {};
-  TRIP_COLUMNS.forEach(function(c) { trip[c] = cleanTripText_(data[c]); });
-  var missing = TRIP_REQUIRED.filter(function(c) { return !trip[c]; });
-  if (missing.length) return { status: 'error', code: 'invalid', message: 'Missing required field(s): ' + missing.join(', ') };
-
-  var options = String(data.departureOptions || '').split(/\r?\n/)
-    .map(function(s) { return s.replace(/\s+/g, ' ').trim().substring(0, DEPARTURE_OPTION_MAX); })
-    .filter(function(s) { return s !== ''; })
-    .slice(0, MAX_DEPARTURE_OPTIONS);
-  // Raw HTML from the client is ignored; it is always generated here.
-  trip.customDepartureHtml = buildDepartureHtml_(trip.departureDetails, options);
-  // Server-controlled: the ID is generated under the lock below and the flags come from checkboxes.
-  var month = String(data.tripMonth || '').trim();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return { status: 'error', code: 'invalid', message: 'Choose the trip month.' };
-  trip.acceptingResponses = isTruthy_(data.acceptingResponses) ? 'TRUE' : 'FALSE';
-  trip.acceptingReceipts = isTruthy_(data.acceptingReceipts) ? 'TRUE' : 'FALSE';
+  // The form's values arrive as data.values (input name -> value).
+  var rec = buildTripRecord_(data.values);
+  if (rec.error) return { status: 'error', code: 'invalid', message: rec.error };
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var ss = getSpreadsheet_('trips');
-    var sheet = ss.getSheetByName('Trips');
-    if (!sheet) return { status: 'error', code: 'config', message: 'Trips sheet is missing.' };
+    var sheet = getOrCreateSheet_(ss, 'Trips', false);
 
-    var lastCol = Math.max(sheet.getLastColumn(), 1);
-    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) { return h.toString().trim(); });
-    TRIP_COLUMNS.forEach(function(c) {
-      if (headers.indexOf(c) === -1) {
-        sheet.getRange(1, headers.length + 1).setValue(c).setFontWeight('bold');
-        headers.push(c);
-      }
-    });
-
-    var idCol = headers.indexOf('tripId');
-    var existingIds = sheet.getLastRow() < 2 ? [] :
+    // The ID is generated under the lock so two leaders can't get the same one.
+    var idCol = getSheetHeaders_(sheet).map(function(h) { return h.toLowerCase(); }).indexOf('tripid');
+    var existingIds = (idCol === -1 || sheet.getLastRow() < 2) ? [] :
       sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim(); });
-    trip.tripId = nextTripId_(month, existingIds);
-    if (!trip.tripId) return { status: 'error', code: 'invalid', message: 'That month already has 99 trips.' };
+    var tripId = nextTripId_(rec.month, existingIds);
+    if (!tripId) return { status: 'error', code: 'invalid', message: 'That month already has 99 trips.' };
 
-    var row = headers.map(function(h) { return trip[h] !== undefined ? trip[h] : ''; });
-    var targetRow = sheet.getLastRow() + 1;
-    // Plain text, so Sheets doesn't turn "Nov 14-16" or "$25" into dates/numbers.
-    sheet.getRange(targetRow, 1, 1, row.length).setNumberFormat('@').setValues([row]);
+    var result = appendRecord_(sheet, rec.fields, { tripId: tripId }, rec.after, { textCells: true });
+    if (result.error) return { status: 'error', code: 'invalid', message: result.error };
 
-    // Who added it goes in a private log tab, never in Trips (doGet publishes Trips).
-    var log = ss.getSheetByName('Trip Log') || ss.insertSheet('Trip Log');
+    // Who added it goes in a private log tab, never in Trips (the slip page shows Trips).
+    var log = getOrCreateSheet_(ss, 'Trip Log', true);
     if (log.getLastRow() === 0) log.appendRow(['Timestamp', 'Added By', 'Trip Title', 'Trip Dates']);
-    log.appendRow([new Date(), info.email, trip.tripTitle, trip.tripDates]);
+    log.appendRow([new Date(), info.email, rec.fields.tripTitle || '', rec.fields.tripDates || '']);
   } finally {
     lock.releaseLock();
   }
-  return { status: 'success', tripId: trip.tripId };
+  return { status: 'success', tripId: tripId };
 }

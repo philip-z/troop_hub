@@ -91,52 +91,21 @@ function handlePermissionPost_(raw, data) {
   if (!data['wordingHash']) flags.push('No wording hash');
   data['Flags'] = flags.join('; ');
 
-  var sheet = ss.getSheetByName('Responses') || ss.getSheets()[1];
+  var sheet = getOrCreateSheet_(ss, 'Responses', true);
 
-  var lastCol = sheet.getLastColumn();
-  var headers = [];
+  // Ensure "Timestamp" and all incoming field keys exist in row 1
+  var incomingKeys = Object.keys(data);
+  var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
 
-  // 1. Read existing exact headers from Row 1
-  if (sheet.getLastRow() > 0 && lastCol > 0) {
-    headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
-      return h.toString().trim();
-    });
-  }
-
-  // 2. Ensure "Timestamp" is in Column 1
-  if (headers.length === 0 || headers[0] === "") {
-    headers = ["Timestamp"];
-    sheet.getRange(1, 1, 1, 1).setValues([headers]).setFontWeight("bold");
-  }
-
-  // 3. Map exact header strings to column array indexes
   var headerMap = {};
-  headers.forEach(function(h, idx) {
-    if (h !== "") {
-      headerMap[h] = idx;
-    }
-  });
+  headers.forEach(function(h, idx) { headerMap[h.toLowerCase()] = idx; });
 
-  // 4. Add a column for any new incoming key
-  Object.keys(data).forEach(function(key) {
-    if (!(key in headerMap)) {
-      var newColIdx = headers.length;
-      sheet.getRange(1, newColIdx + 1).setValue(key).setFontWeight("bold");
-      headers.push(key);
-      headerMap[key] = newColIdx;
-    }
-  });
-
-  // 5. Build row array matching header order exactly
   var rowData = headers.map(function(header) {
-    if (header.toLowerCase() === "timestamp") return new Date();
-
-    return (data[header] !== undefined && data[header] !== null)
-      ? data[header]
-      : "";
+    if (header.toLowerCase() === 'timestamp') return new Date();
+    var val = data[header];
+    return (val !== undefined && val !== null) ? val : '';
   });
 
-  // 6. Append entry row
   sheet.appendRow(rowData);
 
   // 7. Save the signed-in parent's profile (never blocks the submission).
@@ -227,27 +196,29 @@ function wordingHash_(raw) {
 function getUserProfile(userEmail) {
   try {
     var ss = getSpreadsheet_('trips');
-    var sheet = ss.getSheetByName('Profiles');
+    var sheet;
+    try {
+      sheet = getOrCreateSheet_(ss, 'Profiles', false);
+    } catch (e) {
+      return null;
+    }
     if (!sheet || sheet.getLastRow() < 2) return null;
+
     var values = sheet.getDataRange().getDisplayValues();
-    var headers = values[0].map(function(h) { return h.toString().trim(); });
-    var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
+    var headers = getSheetHeaders_(sheet);
+    var col = createColumnGetter_(headers);
     var emailLower = String(userEmail || '').trim().toLowerCase();
     var youth = [];
+
     for (var i = 1; i < values.length; i++) {
       var r = values[i];
       var authEmails = String(col(r, 'Authorized Emails') || '').toLowerCase().split(',').map(function(e) { return e.trim(); });
       if (authEmails.indexOf(emailLower) !== -1 || authEmails.indexOf('*') !== -1) {
-        youth.push({
-          'Youth Name': col(r, 'Scout Name'),
-          'Birth Month': col(r, 'Birth Month'),
-          'Home Patrol': col(r, 'Home Patrol'),
-          'Gender': col(r, 'Gender'),
-          'Authorized Emails': col(r, 'Authorized Emails'),
-          'Youth Emergency Phone': col(r, 'Emergency Phone'),
-          'Youth Home Phone': col(r, 'Emergency Phone 2'),
-          'Medical Notes': col(r, 'Medical Notes')
+        var profile = {};
+        headers.forEach(function(h, idx) {
+          if (h) profile[h] = r[idx];
         });
+        youth.push(profile);
       }
     }
     return youth.length ? { youthProfiles: youth } : null;
@@ -259,31 +230,30 @@ function getUserProfile(userEmail) {
 
 function saveProfileAndYouth_(writerEmail, profileData) {
   var ss = getSpreadsheet_('trips');
-  var sheet = ss.getSheetByName('Profiles') || ss.insertSheet('Profiles');
+  var sheet = getOrCreateSheet_(ss, 'Profiles', true);
   var scoutName = String(profileData['Youth Name'] || profileData['Scout Name'] || '').trim();
   if (!scoutName) return;
 
-  var headers = ['Scout Name', 'Birth Month', 'Home Patrol', 'Gender', 'Authorized Emails', 'Emergency Phone', 'Emergency Phone 2', 'Medical Notes'];
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(headers);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
-  }
+  profileData['Scout Name'] = scoutName;
+  var requiredFields = ['Scout Name', 'Gender', 'Birth Year', 'Birth Month', 'Patrol', 'Rank', 'Position', 'Authorized Emails', 'Emergency Phone', 'Medical Notes'];
+  var headers = ensureSheetHeaders_(sheet, requiredFields);
 
   var values = sheet.getDataRange().getDisplayValues();
-  var sheetHeaders = values[0].map(function(h) { return h.toString().trim(); });
-  var nameCol = sheetHeaders.indexOf('Scout Name');
-  var authCol = sheetHeaders.indexOf('Authorized Emails');
+  var nameIdx = headers.map(function(h) { return h.toLowerCase(); }).indexOf('scout name');
   var targetRow = -1;
 
   for (var i = 1; i < values.length; i++) {
-    if (String(values[i][nameCol]).trim().toLowerCase() === scoutName.toLowerCase()) {
+    if (String(values[i][nameIdx]).trim().toLowerCase() === scoutName.toLowerCase()) {
       targetRow = i + 1;
       break;
     }
   }
 
-  var existingAuth = targetRow !== -1 ? String(values[targetRow - 1][authCol] || '') : writerEmail;
+  var existingRow = targetRow !== -1 ? values[targetRow - 1] : [];
+  var col = createColumnGetter_(headers);
+  var existingAuth = targetRow !== -1 ? String(col(existingRow, 'Authorized Emails') || '') : writerEmail;
   var authEmailsList = existingAuth.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
+
   if (writerEmail && authEmailsList.map(function(e) { return e.toLowerCase(); }).indexOf(writerEmail.toLowerCase()) === -1) {
     authEmailsList.push(writerEmail);
   }
@@ -293,25 +263,20 @@ function saveProfileAndYouth_(writerEmail, profileData) {
       authEmailsList.push(e);
     }
   });
+  profileData['Authorized Emails'] = authEmailsList.join(', ');
 
-  var row = [
-    scoutName,
-    String(profileData['Birth Month'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Birth Month')] : '')).trim(),
-    String(profileData['Home Patrol'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Home Patrol')] : '')).trim(),
-    String(profileData['Gender'] || (targetRow !== -1 ? values[targetRow - 1][sheetHeaders.indexOf('Gender')] : '')).trim(),
-    authEmailsList.join(', '),
-    String(profileData['Youth Emergency Phone'] || profileData['Emergency Phone'] || '').trim(),
-    String(profileData['Youth Home Phone'] || profileData['Emergency Phone 2'] || '').trim(),
-    String(profileData['Medical Notes'] || '').trim()
-  ];
+  var rowPayload = headers.map(function(h, idx) {
+    if (profileData[h] !== undefined && profileData[h] !== null) return profileData[h];
+    return existingRow[idx] !== undefined ? existingRow[idx] : '';
+  });
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     if (targetRow !== -1) {
-      sheet.getRange(targetRow, 1, 1, row.length).setValues([row]);
+      sheet.getRange(targetRow, 1, 1, rowPayload.length).setValues([rowPayload]);
     } else {
-      sheet.appendRow(row);
+      sheet.appendRow(rowPayload);
     }
   } finally {
     lock.releaseLock();

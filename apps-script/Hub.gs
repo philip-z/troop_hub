@@ -7,7 +7,6 @@
 // the browser for identity: the email always comes from the verified token.
 // ---------------------------------------------------------------------------
 
-var HUB_FIELD_MAX = 1000;
 var RECEIPT_PHOTO_MAX_BYTES = 3 * 1024 * 1024; // the page shrinks photos to well under this
 
 // Folder for receipt photos: Script Property RECEIPTS_FOLDER_ID if set, otherwise a
@@ -40,18 +39,18 @@ function hubSaveReceiptPhoto_(tripId, base64) {
 }
 
 // kind -> { tab, permission (Leaders sheet column, or '' for any signed-in user),
-// fields: client field names in column order }.
-// Every row is prefixed with Timestamp and suffixed with the verified email.
+// byColumn (header for the verified email), tripFlag (Trips column that must be TRUE,
+// optional), closedMessage, photoColumn (header for the uploaded photo's link, optional) }.
+// The record's own columns are NOT listed here: they are the `name`s of the form inputs
+// in index.html (see appendRecord_ in Sheets.gs). The server also fills Timestamp,
+// Trip ID and Trip (SERVER_COLUMNS), plus byColumn and photoColumn, and the browser
+// cannot send those names.
 var HUB_RECORDS = {
-  receipt:       { tab: 'Receipts', permission: '', byLabel: 'Submitted By',
-                   headers: ['Trip ID', 'Trip', 'Description', 'Amount', 'Receipt URL'],
-                   fields:  ['tripId', 'tripName', 'description', 'amount', 'url'] },
-  payment:       { tab: 'Payments', permission: 'recordPayments', byLabel: 'Recorded By',
-                   headers: ['Trip ID', 'Scout', 'Amount', 'Method'],
-                   fields:  ['tripId', 'scout', 'amount', 'method'] },
-  reimbursement: { tab: 'Reimbursements', permission: 'recordReimbursements', byLabel: 'Recorded By',
-                   headers: ['Trip ID', 'Paid To', 'Amount', 'Notes'],
-                   fields:  ['tripId', 'payee', 'amount', 'notes'] }
+  receipt:       { tab: 'Receipts', permission: '', byColumn: 'Submitted By',
+                   tripFlag: 'acceptingReceipts', closedMessage: 'This trip is not accepting receipts.',
+                   photoColumn: 'Receipt URL' },
+  payment:       { tab: 'Payments', permission: 'recordPayments', byColumn: 'Recorded By' },
+  reimbursement: { tab: 'Reimbursements', permission: 'recordReimbursements', byColumn: 'Recorded By' }
 };
 
 function hubError_(code, message) {
@@ -105,73 +104,78 @@ function handleHub_(data) {
       if (!spec) return hubError_('invalid', 'Unknown record type.');
       auth = hubAuth_(data, spec.permission);
       if (auth.error) return auth.error;
-      return hubAppendRecord_(spec, data.kind, data.values || {}, auth.info.email);
+      return hubAppendRecord_(spec, data, auth.info.email);
   }
   return hubError_('invalid', 'Unknown action.');
 }
 
-// One entry per trip for the hub's list. Trips that accept permission slips also carry
+// One entry per trip for the hub's list: every Trips column under its own header name
+// (see tripSummary_). Trips that accept permission slips also carry
 // `slip`: the same config slipTrip returns, so the slip page can open without another call.
 function hubListTrips_() {
-  var sheet = getSpreadsheet_('trips').getSheetByName('Trips');
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), 'Trips', false);
+  } catch (e) {
+    return [];
+  }
   if (!sheet || sheet.getLastRow() < 2) return [];
   var raw = sheet.getDataRange().getValues();
   var values = sheet.getDataRange().getDisplayValues();
   var headers = values[0].map(function(h) { return h.toString().trim(); });
-  var col = function(row, name) { var i = headers.indexOf(name); return i === -1 ? '' : row[i]; };
+  var col = createColumnGetter_(headers);
   var trips = [];
   for (var i = 1; i < values.length; i++) {
     var r = values[i];
     if (String(col(r, 'tripId')).trim() === '') continue;
-    var accepting = isTruthy_(col(r, 'acceptingResponses'));
-    var trip = {
-      id: col(r, 'tripId'),
-      name: col(r, 'tripTitle'),
-      date: col(r, 'tripDates'),
-      location: col(r, 'tripLocation'),
-      cost: col(r, 'tripCost'),
-      acceptingResponses: accepting,
-      acceptingReceipts: isTruthy_(col(r, 'acceptingReceipts'))
-    };
-    if (accepting) trip.slip = tripRowConfig_(headers, raw[i]);
+    var trip = tripSummary_(tripRowObject_(headers, r));
+    if (trip.acceptingResponses) trip.slip = tripRowConfig_(headers, raw[i]);
     trips.push(trip);
   }
   return trips;
 }
 
-// Blocks spreadsheet formula injection and caps length.
-function hubCell_(v) {
-  var s = (v === undefined || v === null) ? '' : String(v).substring(0, HUB_FIELD_MAX);
-  return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+// The columns the server fills itself for this kind of record, as { before, after }
+// objects of header -> value. `before` goes ahead of the form's fields, `after` behind.
+function hubServerFields_(spec, trip, photoUrl, email) {
+  var text = function(v) { return v === undefined || v === null ? '' : String(v); };
+  var before = {}, after = {};
+  before[SERVER_COLUMNS.timestamp] = new Date();
+  before[SERVER_COLUMNS.tripId] = text(trip.tripId);
+  before[SERVER_COLUMNS.tripName] = text(trip.tripTitle); // from the sheet, not the browser
+  if (spec.photoColumn) after[spec.photoColumn] = photoUrl || '';
+  after[spec.byColumn] = email;
+  return { before: before, after: after };
 }
 
-function hubAppendRecord_(spec, kind, values, email) {
-  var trip = getTripConfig_(getSpreadsheet_('trips'), values.tripId);
+// data: { tripId, values (form field name -> value), photo: { data } (optional) }.
+// The trip always comes from the sheet; the browser never supplies the photo link.
+function hubAppendRecord_(spec, data, email) {
+  var trip = getTripConfig_(getSpreadsheet_('trips'), data.tripId);
   if (!trip) return hubError_('not_found', 'Trip not found.');
-  if (kind === 'receipt' && !isTruthy_(trip.acceptingReceipts)) {
-    return hubError_('closed', 'This trip is not accepting receipts.');
-  }
-  values.tripId = String(trip.tripId);
-  values.tripName = String(trip.tripTitle); // from the sheet, not the browser
-  // The browser never supplies the link: it is the Drive URL of an uploaded photo, or blank.
-  values.url = '';
-  if (kind === 'receipt' && values.photo && values.photo.data) {
-    var saved = hubSaveReceiptPhoto_(values.tripId, values.photo.data);
-    if (saved.error) return saved.error;
-    values.url = saved.url;
+  if (spec.tripFlag && !isTruthy_(trip[spec.tripFlag])) {
+    return hubError_('closed', spec.closedMessage || 'This trip is not accepting that.');
   }
 
-  var row = [new Date()].concat(spec.fields.map(function(f) { return hubCell_(values[f]); }), [email]);
+  // Validate the fields before uploading anything.
+  var server = hubServerFields_(spec, trip, '', email);
+  var clean = cleanRecordFields_(data.values, Object.keys(server.before).concat(Object.keys(server.after)));
+  if (clean.error) return hubError_('invalid', clean.error);
+
+  var url = '';
+  if (spec.photoColumn && data.photo && data.photo.data) {
+    var saved = hubSaveReceiptPhoto_(String(trip.tripId), data.photo.data);
+    if (saved.error) return saved.error;
+    url = saved.url;
+  }
+  server = hubServerFields_(spec, trip, url, email);
+
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var ss = getSpreadsheet_('trips');
-    var sheet = ss.getSheetByName(spec.tab) || ss.insertSheet(spec.tab);
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(['Timestamp'].concat(spec.headers, [spec.byLabel]));
-      sheet.getRange(1, 1, 1, spec.headers.length + 2).setFontWeight('bold');
-    }
-    sheet.appendRow(row);
+    var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.tab, true);
+    var result = appendRecord_(sheet, clean.fields, server.before, server.after);
+    if (result.error) return hubError_('invalid', result.error);
   } finally {
     lock.releaseLock();
   }

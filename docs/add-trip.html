@@ -28,6 +28,10 @@
 
     <form id="tripForm" hidden>
       <p><strong>The new trip is live immediately for whichever forms you tick below.</strong></p>
+      <!-- Each input's name is its column in the Trips sheet, so to add a trip detail add an input
+           here (and a span with the same id in slip.html to show it). tripMonth, departureOptions and
+           the two accepting checkboxes are read by the script but are not columns (see Leaders.gs).
+           Inputs marked data-no-copy are not filled in by "Copy details from a previous trip". -->
 
       <p id="copyRow" hidden><label for="copyFrom"><strong>Copy details from a previous trip</strong> (optional)</label><br>
         <select id="copyFrom" class="input-long"><option value="">-- Start blank --</option></select><br>
@@ -37,9 +41,9 @@
       <p><label for="tripLocation"><strong>Location</strong> (required)</label><br>
         <input type="text" id="tripLocation" name="tripLocation" required maxlength="500" class="input-long"></p>
       <p><label for="tripMonth"><strong>Trip month</strong> (required; used for the trip ID, e.g. 20261101)</label><br>
-        <input type="month" id="tripMonth" name="tripMonth" required class="input-long"></p>
+        <input type="month" id="tripMonth" name="tripMonth" required data-no-copy class="input-long"></p>
       <p><label for="tripDates"><strong>Dates</strong> (required, e.g. Nov 14-16, 2026)</label><br>
-        <input type="text" id="tripDates" name="tripDates" required maxlength="500" class="input-long"></p>
+        <input type="text" id="tripDates" name="tripDates" required data-no-copy maxlength="500" class="input-long"></p>
       <p><label for="departureDetails"><strong>Meet for departure</strong> (place and time)</label><br>
         <input type="text" id="departureDetails" name="departureDetails" maxlength="500" class="input-long"></p>
       <p><label for="departureOptions"><strong>Departure options</strong> (optional, one per line). If you list any, parents must choose one on the permission slip.</label><br>

@@ -1,0 +1,327 @@
+const test = require("node:test");
+const assert = require("node:assert");
+const { loadGs } = require("../dev/gs-loader.js");
+
+// Objects created inside the vm have a different prototype; normalize before deepStrictEqual.
+const plain = (x) => JSON.parse(JSON.stringify(x));
+const isDate = (x) => Object.prototype.toString.call(x) === "[object Date]";
+
+// Just enough of the Sheet API for what Sheets.gs uses.
+function fakeSheet(rows, name) {
+  rows = rows || [];
+  const formats = [];
+  const range = (row, col, nRows, nCols) => ({
+    getValues() {
+      const out = [];
+      for (let r = 0; r < (nRows || 1); r++) {
+        const line = [];
+        for (let c = 0; c < (nCols || 1); c++) {
+          const v = (rows[row - 1 + r] || [])[col - 1 + c];
+          line.push(v === undefined ? "" : v);
+        }
+        out.push(line);
+      }
+      return out;
+    },
+    getDisplayValues() { return this.getValues().map((line) => line.map(String)); },
+    setValue(v) {
+      while (rows.length < row) rows.push([]);
+      rows[row - 1][col - 1] = v;
+      return this;
+    },
+    setFontWeight() { return this; },
+    setNumberFormat(f) { formats.push(f); return this; },
+    setValues(vals) {
+      vals.forEach((line, i) => {
+        while (rows.length < row + i) rows.push([]);
+        rows[row - 1 + i] = line.slice();
+      });
+      return this;
+    }
+  });
+  return {
+    rows,
+    formats,
+    getName: () => name || "Sheet",
+    getLastRow: () => rows.length,
+    getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0),
+    appendRow: (r) => { rows.push(r.slice()); },
+    getRange: range
+  };
+}
+
+function fakeSpreadsheet(sheets) {
+  const map = Object.assign({}, sheets);
+  return {
+    sheets: map,
+    getSheetByName: (n) => map[n] || null,
+    insertSheet: (n) => (map[n] = fakeSheet([], n))
+  };
+}
+
+function loadSheets() {
+  const logged = [];
+  const ctx = loadGs(["Sheets.gs"], { logEvent_: (stage, detail) => logged.push([stage, detail]) });
+  return { ctx, logged };
+}
+
+test("cleanRecordFields_ accepts form-style names and cleans values", () => {
+  const { ctx } = loadSheets();
+  const r = ctx.cleanRecordFields_({ "Paid To": "Bob", "Check #": ["1", "2"], Amount: "=1+1", Notes: "x".repeat(2000) }, ["Timestamp"]);
+  assert.strictEqual(r.error, undefined);
+  assert.strictEqual(r.fields["Paid To"], "Bob");
+  assert.strictEqual(r.fields["Check #"], "1, 2");
+  assert.strictEqual(r.fields.Amount, "'=1+1");
+  assert.strictEqual(r.fields.Notes.length, 1000);
+});
+
+test("cleanRecordFields_ rejects bad input", () => {
+  const { ctx } = loadSheets();
+  const bad = (raw, reserved) => assert.ok(ctx.cleanRecordFields_(raw, reserved || []).error, String(JSON.stringify(raw)).slice(0, 60));
+  bad({ "=IMPORTXML(1)": "x" });
+  bad({ " Leading": "x" });
+  bad({ "Trailing ": "x" });
+  bad({ timestamp: "x" }, ["Timestamp"]);
+  bad({ Amount: "1", amount: "2" });
+  bad(Object.fromEntries(Array.from({ length: 41 }, (_, i) => ["Field " + i, "x"])));
+  bad({});
+  bad(undefined);
+  bad(["a"]);
+  bad({ ["A".repeat(81)]: "x" });
+});
+
+test("appendRecord_ on an empty sheet writes before, fields, after in order", () => {
+  const { ctx } = loadSheets();
+  const sheet = fakeSheet();
+  const res = ctx.appendRecord_(sheet, { Description: "Pizza", Amount: "12.50" }, { Timestamp: new Date(), "Trip ID": "1" }, { "Submitted By": "a@x.com" });
+  assert.strictEqual(res.error, undefined);
+  assert.deepStrictEqual(plain(sheet.rows[0]), ["Timestamp", "Trip ID", "Description", "Amount", "Submitted By"]);
+  assert.ok(isDate(sheet.rows[1][0]));
+  assert.deepStrictEqual(plain(sheet.rows[1].slice(1)), ["1", "Pizza", "12.50", "a@x.com"]);
+});
+
+test("appendRecord_ maps by header and appends new fields as new last columns", () => {
+  const { ctx, logged } = loadSheets();
+  const headers = ["Timestamp", "Trip ID", "Trip", "Description", "Amount", "Receipt URL", "Submitted By"];
+  const old = ["t0", "1", "Camp", "Old", "5", "", "z@x.com"];
+  const sheet = fakeSheet([headers.slice(), old.slice()]);
+  ctx.appendRecord_(sheet, { description: "New", AMOUNT: "7", "Check Number": "99" },
+    { Timestamp: new Date(), "Trip ID": "2", Trip: "Hike" }, { "Receipt URL": "u", "Submitted By": "a@x.com" });
+  assert.deepStrictEqual(plain(sheet.rows[0]), headers.concat(["Check Number"]));
+  assert.deepStrictEqual(plain(sheet.rows[1]), old); // untouched
+  const row = sheet.rows[2];
+  assert.deepStrictEqual(plain(row.slice(1)), ["2", "Hike", "New", "7", "u", "a@x.com", "99"]);
+  assert.ok(logged.some((l) => l[0] === "columns added" && l[1].includes("Check Number")));
+});
+
+test("appendRecord_ refuses to grow a sheet past the column cap", () => {
+  const { ctx } = loadSheets();
+  const headers = Array.from({ length: 59 }, (_, i) => "H" + i);
+  const sheet = fakeSheet([headers.slice()]);
+  const res = ctx.appendRecord_(sheet, { NewA: "1", NewB: "2" }, {}, {});
+  assert.ok(res.error);
+  assert.deepStrictEqual(plain(sheet.rows), [headers]);
+});
+
+function makeHub() {
+  const logged = [];
+  const photoCalls = [];
+  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Code.gs"], {
+    logEvent_: (stage, detail) => logged.push([stage, detail]),
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) }
+  });
+  const ss = fakeSpreadsheet();
+  const trips = {
+    "20261101": { tripId: "20261101", tripTitle: "Fall Campout", acceptingReceipts: "TRUE" },
+    "20261102": { tripId: "20261102", tripTitle: "Hike", acceptingReceipts: "FALSE" }
+  };
+  ctx.getSpreadsheet_ = () => ss;
+  ctx.getTripConfig_ = (_ss, id) => trips[id] || null;
+  ctx.hubSaveReceiptPhoto_ = () => { photoCalls.push(1); return { url: "https://drive.example/photo" }; };
+  return { ctx, ss, photoCalls, logged };
+}
+
+test("hub receipt: form fields become columns, server fills the rest", () => {
+  const { ctx, ss } = makeHub();
+  const res = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt,
+    { tripId: "20261101", values: { Description: "Pizza", Amount: "12.50" }, photo: { data: "abc" } }, "a@x.com");
+  assert.deepStrictEqual(plain(res), { status: "success" });
+  const rows = ss.sheets.Receipts.rows;
+  assert.deepStrictEqual(plain(rows[0]), ["Timestamp", "Trip ID", "Trip", "Description", "Amount", "Receipt URL", "Submitted By"]);
+  assert.ok(isDate(rows[1][0]));
+  assert.deepStrictEqual(plain(rows[1].slice(1)), ["20261101", "Fall Campout", "Pizza", "12.50", "https://drive.example/photo", "a@x.com"]);
+});
+
+test("hub payment: a brand-new form field creates its own column", () => {
+  const { ctx, ss } = makeHub();
+  const res = ctx.hubAppendRecord_(ctx.HUB_RECORDS.payment,
+    { tripId: "20261101", values: { Scout: "Sam", Amount: "40", Method: "Check", "Check Number": "1001" } }, "t@x.com");
+  assert.strictEqual(res.status, "success");
+  const rows = ss.sheets.Payments.rows;
+  assert.deepStrictEqual(plain(rows[0]), ["Timestamp", "Trip ID", "Trip", "Scout", "Amount", "Method", "Check Number", "Recorded By"]);
+  assert.deepStrictEqual(plain(rows[1].slice(1)), ["20261101", "Fall Campout", "Sam", "40", "Check", "1001", "t@x.com"]);
+});
+
+test("hub rejects server-owned column names from the browser and writes nothing", () => {
+  const { ctx, ss, photoCalls } = makeHub();
+  ["Recorded By", "trip id", "Timestamp", "Trip"].forEach((name) => {
+    const res = ctx.hubAppendRecord_(ctx.HUB_RECORDS.payment, { tripId: "20261101", values: { Scout: "Sam", [name]: "spoof" } }, "t@x.com");
+    assert.strictEqual(res.code, "invalid", name);
+  });
+  const res = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt, { tripId: "20261101", values: { "Receipt URL": "evil" }, photo: { data: "abc" } }, "a@x.com");
+  assert.strictEqual(res.code, "invalid");
+  assert.strictEqual(photoCalls.length, 0);
+  assert.strictEqual(ss.sheets.Payments, undefined);
+  assert.strictEqual(ss.sheets.Receipts, undefined);
+});
+
+test("hub closed and unknown trips", () => {
+  const { ctx } = makeHub();
+  const closed = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt, { tripId: "20261102", values: { Description: "x" } }, "a@x.com");
+  assert.strictEqual(closed.code, "closed");
+  const missing = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt, { tripId: "nope", values: { Description: "x" } }, "a@x.com");
+  assert.strictEqual(missing.code, "not_found");
+});
+
+test("hub invalid field name does not upload the photo", () => {
+  const { ctx, photoCalls } = makeHub();
+  const res = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt,
+    { tripId: "20261101", values: { "=HYPERLINK(1)": "x" }, photo: { data: "abc" } }, "a@x.com");
+  assert.strictEqual(res.code, "invalid");
+  assert.strictEqual(photoCalls.length, 0);
+});
+
+const formValues = (extra) => Object.assign({
+  tripTitle: "  Winter   Camp ", tripLocation: "Camp X", tripMonth: "2026-12", tripDates: "Dec 5-7, 2026",
+  departureDetails: "Church <lot>", departureOptions: "Fri 5pm\n\nSat 8am", tripCost: "-5 deposit",
+  acceptingResponses: "TRUE"
+}, extra);
+
+test("buildTripRecord_: form names are the columns, the script fills only its own", () => {
+  const { ctx } = makeHub();
+  const rec = plain(ctx.buildTripRecord_(formValues({ tripGear: "Tents" })));
+  assert.strictEqual(rec.error, undefined);
+  assert.strictEqual(rec.month, "2026-12");
+  assert.deepStrictEqual(rec.fields, {
+    tripTitle: "Winter Camp", tripLocation: "Camp X", tripDates: "Dec 5-7, 2026",
+    departureDetails: "Church <lot>", tripCost: "-5 deposit", tripGear: "Tents"
+  });
+  assert.deepStrictEqual(Object.keys(rec.after), ["customDepartureHtml", "acceptingResponses", "acceptingReceipts"]);
+  assert.strictEqual(rec.after.acceptingResponses, "TRUE");
+  assert.strictEqual(rec.after.acceptingReceipts, "FALSE");
+  assert.ok(rec.after.customDepartureHtml.includes("Church &lt;lot&gt;"));
+  assert.ok(rec.after.customDepartureHtml.includes('<option value="Sat 8am">'));
+});
+
+test("buildTripRecord_ rejects a bad month, server-owned columns and bad names", () => {
+  const { ctx } = makeHub();
+  assert.ok(ctx.buildTripRecord_(formValues({ tripMonth: "" })).error);
+  assert.ok(ctx.buildTripRecord_(formValues({ tripId: "20260101" })).error);
+  assert.ok(ctx.buildTripRecord_(formValues({ customDepartureHtml: "<script>" })).error);
+  assert.ok(ctx.buildTripRecord_(formValues({ "=BAD()": "x" })).error);
+  assert.ok(ctx.buildTripRecord_(undefined).error);
+});
+
+function makeTripSheet(rows) {
+  const h = makeHub();
+  const trips = fakeSheet(rows, "Trips");
+  h.ss.sheets.Trips = trips;
+  h.ctx.verifyGoogleTokenInfo_ = () => ({ email: "l@x.com", emailVerified: true });
+  h.ctx.hasLeaderPermission_ = () => true;
+  return Object.assign(h, { trips });
+}
+
+test("addTrip_ on an existing sheet: next ID, new form field becomes a column, text cells, log row", () => {
+  const headers = ["tripId", "tripTitle", "tripLocation", "tripDates", "departureDetails", "returnDetails", "tripCost",
+    "tripCoordinator", "tripUniform", "customDepartureHtml", "acceptingResponses", "acceptingReceipts"];
+  const old = ["20261201", "Old", "", "", "", "", "", "", "", "", "TRUE", "FALSE"];
+  const { ctx, ss, trips } = makeTripSheet([headers.slice(), old.slice()]);
+  const res = plain(ctx.addTrip_({ idToken: "t", values: formValues({ tripGear: "Tents" }) }));
+  assert.deepStrictEqual(res, { status: "success", tripId: "20261202" });
+  assert.deepStrictEqual(plain(trips.rows[0]), headers.concat(["tripGear"]));
+  assert.deepStrictEqual(plain(trips.rows[1]), old);
+  const row = plain(trips.rows[2]);
+  assert.strictEqual(row[0], "20261202");
+  assert.strictEqual(row[1], "Winter Camp");
+  assert.strictEqual(row[6], "-5 deposit"); // no stray apostrophe in a text cell
+  assert.strictEqual(row[10], "TRUE");
+  assert.strictEqual(row[11], "FALSE");
+  assert.strictEqual(row[12], "Tents");
+  assert.deepStrictEqual(trips.formats, ["@"]);
+  const log = ss.sheets["Trip Log"].rows;
+  assert.deepStrictEqual(plain(log[1].slice(1)), ["l@x.com", "Winter Camp", "Dec 5-7, 2026"]);
+});
+
+test("addTrip_ on an empty Trips sheet creates headers from the form", () => {
+  const { ctx, trips } = makeTripSheet([]);
+  const res = plain(ctx.addTrip_({ idToken: "t", values: { tripTitle: "A", tripMonth: "2026-01" } }));
+  assert.deepStrictEqual(res, { status: "success", tripId: "20260101" });
+  assert.deepStrictEqual(plain(trips.rows[0]),
+    ["tripId", "tripTitle", "customDepartureHtml", "acceptingResponses", "acceptingReceipts"]);
+});
+
+test("addTrip_ reports a form error without touching the sheet", () => {
+  const { ctx, trips } = makeTripSheet([["tripId"]]);
+  const res = plain(ctx.addTrip_({ idToken: "t", values: { tripTitle: "A" } }));
+  assert.strictEqual(res.code, "invalid");
+  assert.deepStrictEqual(plain(trips.rows), [["tripId"]]);
+});
+
+test("tripSummary_ keeps every column and turns the flags into booleans", () => {
+  const { ctx } = makeHub();
+  const s = plain(ctx.tripSummary_({ tripId: "1", tripTitle: "T", tripGear: "x", acceptingResponses: "TRUE", acceptingReceipts: "" }));
+  assert.deepStrictEqual(s, { tripId: "1", tripTitle: "T", tripGear: "x", acceptingResponses: true, acceptingReceipts: false });
+});
+
+test("tripTemplateFromRow_ keeps every column and swaps the generated HTML for plain options", () => {
+  const { ctx } = makeHub();
+  const rec = ctx.buildTripRecord_(formValues());
+  const t = plain(ctx.tripTemplateFromRow_(Object.assign({ tripId: "1" }, plain(rec.fields), plain(rec.after))));
+  assert.strictEqual(t.departureOptions, "Fri 5pm\nSat 8am");
+  assert.strictEqual(t.customDepartureHtml, undefined);
+  assert.strictEqual(t.tripLocation, "Camp X");
+});
+
+test("tableRows_ sends every column by header, minus private and blank ones", () => {
+  const { ctx } = makeHub();
+  const out = plain(ctx.tableRows_([
+    [" Item ", "Qty", "_supplier", "", "Item", "New Column"],
+    ["Tent", 3, "secret", "x", "dup", "hi"],
+    ["", "", "only private", "", "", ""],
+    ["Stove", "", "", "", ""]
+  ]));
+  assert.deepStrictEqual(out, [
+    { Item: "Tent", Qty: "3", "New Column": "hi" },
+    { Item: "Stove", Qty: "", "New Column": "" }
+  ]);
+  assert.deepStrictEqual(plain(ctx.tableRows_([["a"]])), []);
+  assert.deepStrictEqual(plain(ctx.tableRows_(undefined)), []);
+});
+
+test("tableRows_ caps columns and cell length", () => {
+  const { ctx } = makeHub();
+  const headers = Array.from({ length: 60 }, (_, i) => "H" + i);
+  const out = plain(ctx.tableRows_([headers, headers.map(() => "x".repeat(3000))]));
+  assert.strictEqual(Object.keys(out[0]).length, 40);
+  assert.strictEqual(out[0].H0.length, 2000);
+});
+
+test("listEquipment_ and listRecipes_ return whole sheets, or a config error", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Equipment = fakeSheet([["item", "color"], ["Tent", "green"]]);
+  ctx.findSpreadsheet_ = (role) => (role === "equipment" ? ss : null);
+  assert.deepStrictEqual(plain(ctx.listEquipment_()), { status: "success", items: [{ item: "Tent", color: "green" }] });
+  assert.strictEqual(ctx.listRecipes_().code, "config");
+  ctx.findSpreadsheet_ = () => ss; // spreadsheet without the tab
+  assert.deepStrictEqual(plain(ctx.listRecipes_()), { status: "success", items: [] });
+});
+
+test("HUB_RECORDS entries are well-formed", () => {
+  const { ctx } = makeHub();
+  const perms = plain(ctx.LEADER_PERMISSIONS);
+  Object.entries(plain(ctx.HUB_RECORDS)).forEach(([kind, spec]) => {
+    assert.ok(spec.tab, kind + " tab");
+    assert.ok(spec.byColumn, kind + " byColumn");
+    assert.ok(spec.permission === "" || perms.includes(spec.permission), kind + " permission");
+  });
+});
