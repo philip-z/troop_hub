@@ -6,29 +6,11 @@
 
   function msg(t, err) { const m = $("msg"); m.textContent = t || ""; m.style.color = err ? "#b00020" : "#1b5e20"; }
 
-  // The Apps Script web app verifies the Google ID token and enforces who may do what.
-  // Sent as text/plain so the browser skips the CORS preflight Apps Script can't answer.
-  // Errors carry what the caller needs to decide whether to try again later:
-  //   err.network  no connection (or it timed out)    err.retry  the server hiccuped (bad status/reply)
-  //   err.code     the server's code, e.g. "signin" or "not_allowed"
+  // The Apps Script web app verifies the Google ID token and enforces who may do what. The transport
+  // (offline.js) flags a missing reply as err.network or err.retry; a reply that says "error" becomes an
+  // error carrying the server's err.code, e.g. "signin" or "not_allowed".
   async function api(action, payload, timeoutMs) {
-    const ctl = timeoutMs ? new AbortController() : null;
-    const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
-    let res;
-    try {
-      res = await fetch(C.APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({}, payload, { action, idToken })),
-        signal: ctl ? ctl.signal : undefined
-      });
-    } catch (e) {
-      throw Object.assign(new Error("There is no connection to the server."), { network: true });
-    } finally { if (timer) clearTimeout(timer); }
-    if (!res.ok) throw Object.assign(new Error("Server error " + res.status), { retry: true });
-    let d;
-    try { d = await res.json(); }
-    catch (e) { throw Object.assign(new Error("The server sent a reply that could not be read."), { retry: true }); }
+    const d = await O.send(C.APPS_SCRIPT_URL, Object.assign({}, payload, { action, idToken }), timeoutMs);
     if (d.status === "error" || d.error) {
       if (d.code === "signin") TroopAuth.signOut();
       throw Object.assign(new Error(d.message || d.error), { code: d.code });
@@ -97,28 +79,14 @@
   // ignores an ID it already has. Resolves { queued: true } when it could not be sent yet.
   async function submitRecord(kind, tripId, values, photo) {
     const payload = { kind, tripId, values, photo, clientId: O.uuid(), enteredAt: new Date().toISOString() };
-    let item;
-    try {
-      item = await O.outbox.add({ id: payload.clientId, email, kind: "hubSubmit", payload, createdAt: payload.enteredAt });
-    } catch (e) {
-      await api("hubSubmit", payload); // no offline storage in this browser: send straight away
-      return {};
-    }
+    const r = await O.submitNow({ id: payload.clientId, email, kind: "hubSubmit", payload, createdAt: payload.enteredAt }, sendItem);
     renderOutbox();
-    const r = await sendItem(item);
-    if (r.ok) { await O.outbox.remove(item.id); renderOutbox(); return {}; }
-    if (r.retry) { renderOutbox(); return { queued: true, signin: r.signin }; }
-    await O.outbox.remove(item.id); // refused: the person fixes the form and tries again
-    renderOutbox();
-    throw new Error(r.message);
+    if (r.sent) return {};
+    if (r.queued) return { queued: true, signin: r.signin };
+    throw new Error(r.message || "It could not be sent. Check your connection and try again.");
   }
-  async function sendItem(item) {
-    try { await api("hubSubmit", item.payload, 45000); return { ok: true }; }
-    catch (e) {
-      if (e.network || e.retry || e.code === "signin") return { ok: false, retry: true, signin: e.code === "signin", message: e.message };
-      return { ok: false, message: e.message };
-    }
-  }
+  // Sends one queued item of any kind (receipts and so on from here, permission slips from the slip page).
+  const sendItem = O.makeSender({ url: C.APPS_SCRIPT_URL, getToken: () => idToken, onSignin: () => TroopAuth.signOut() });
   async function flushOutbox() {
     if (!email || !idToken || navigator.onLine === false) { renderOutbox(); return; }
     let r;
@@ -126,6 +94,7 @@
     if (r.sent) msg("Sent " + r.sent + " saved item" + (r.sent === 1 ? "" : "s") + ".");
   }
   function describeItem(item) {
+    if (item.label) return item.label; // e.g. a permission slip, labeled where it was signed
     const p = item.payload || {};
     const trip = trips.find((t) => t.tripId === p.tripId);
     const vals = Object.values(p.values || {}).map(String).filter(Boolean).slice(0, 2).join(", ");

@@ -335,7 +335,42 @@ function setupVehicleAutocomplete() {
 // 7. Submission
 // ---------------------------------------------------------------------------
 
-function handleFormSubmit(e) {
+// A slip is written to the outbox on this device first, then sent, so it survives losing signal or
+// closing the page. Its _clientId lets the server ignore a repeat of a slip it already has, and
+// _enteredAt records when it was signed here (it may arrive much later). A slip that couldn't be sent
+// yet stays queued and goes out by itself (see flushSlipOutbox); the form is cleared, since the
+// signed slip is safe in the outbox.
+const slipSender = TroopOffline.makeSender({
+  url: APPS_SCRIPT_URL,
+  getToken: () => window.currentIdToken,
+  onSignin: () => TroopAuth.signOut()
+});
+
+function slipLabel(payload) {
+  const kind = activeProfileKind();
+  const key = kind && profileKeyInput(kind);
+  const name = key ? String(payload[key.name] || '').trim() : '';
+  const title = (document.getElementById('tripTitle') || {}).textContent || '';
+  return 'Permission slip' + (name ? ' for ' + name : '') + (title && title !== 'Loading...' ? ' (' + title + ')' : '');
+}
+
+// Resolves { sent } | { queued, signin } | { refused, message } | { failed, message } (not sent and not
+// saved: this browser has no offline storage, so the entries stay on the form like they used to).
+function submitSlip(payload) {
+  return TroopOffline.submitNow({
+    id: payload._clientId, email: window.currentEmail, kind: 'slipSubmit',
+    payload, createdAt: payload._enteredAt, label: slipLabel(payload)
+  }, slipSender);
+}
+
+function finishSlip(form) {
+  localStorage.removeItem(DRAFT_KEY);
+  form.reset();
+  toggleFormType();
+  updatePrintHeader();
+}
+
+async function handleFormSubmit(e) {
   e.preventDefault();
   const form = e.target;
   const formData = new FormData(form);
@@ -352,8 +387,10 @@ function handleFormSubmit(e) {
   payload._tripId = TRIP_ID;
   payload._tripRevision = window.currentTripId || '';
   payload._slipSnapshot = buildSlipSnapshot(form);
-  if (window.currentIdToken) payload._idToken = window.currentIdToken;
+  payload._clientId = TroopOffline.uuid();
+  payload._enteredAt = new Date().toISOString();
   // The inputs marked data-profile travel with the slip, so the server saves them in the same call.
+  // (The sign-in token is added when sending, never stored in the outbox.)
   const profile = window.currentIdToken ? collectProfile() : null;
   if (profile) payload._profile = { kind: profile.kind, data: profile.profileData };
 
@@ -361,38 +398,60 @@ function handleFormSubmit(e) {
   if (submitBtn) submitBtn.disabled = true;
   setSubmitting(true);
 
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  })
-  .then(res => res.json())
-  .then(response => {
-    setSubmitting(false); // clear before alert(), which blocks the page
-    if (response.status === 'success') {
-      alert("Permission slip submitted successfully! Thank you.");
-      if (profile) rememberProfileLocally(profile);
-      localStorage.removeItem(DRAFT_KEY);
-      form.reset();
-      toggleFormType();
-      updatePrintHeader();
-    } else if (response.code === 'signin') {
-      saveFormDraft();
-      alert(response.message);
-      TroopAuth.signOut();
-    } else {
-      alert("Submission error: " + response.message + "\nYour entries are saved on this device. Please wait a minute and press Submit again.");
-    }
-  })
-  .catch(err => {
-    setSubmitting(false);
-    alert("Network error submitting form. Your entries are saved on this device. Please wait a minute and press Submit again.");
+  let result;
+  try {
+    result = await submitSlip(payload);
+  } catch (err) {
     console.error(err);
-  })
-  .finally(() => {
-    setSubmitting(false);
-    if (submitBtn) submitBtn.disabled = false;
-  });
+    result = { failed: true };
+  }
+  setSubmitting(false); // clear before alert(), which blocks the page
+  if (submitBtn) submitBtn.disabled = false;
+
+  if (result.sent) {
+    alert("Permission slip submitted successfully! Thank you.");
+    if (profile) rememberProfileLocally(profile);
+    finishSlip(form);
+  } else if (result.queued) {
+    alert(result.signin
+      ? "Your sign-in has expired, so your signed slip is saved on this device. Sign in again and it will be sent."
+      : "There is no connection right now, so your signed slip is saved on this device. It will be sent automatically when you are back online; keep this browser signed in.");
+    if (profile) rememberProfileLocally(profile);
+    finishSlip(form);
+  } else if (result.refused) {
+    alert("Submission error: " + result.message + "\nYour entries are saved on this device. Please wait a minute and press Submit again.");
+  } else if (result.signin) {
+    saveFormDraft();
+    alert("Your sign-in has expired. Please sign in again; your entries are still on the form.");
+  } else {
+    alert("Network error submitting form. Your entries are saved on this device. Please wait a minute and press Submit again.");
+  }
+  renderSlipOutbox();
 }
+
+// ---- Slips saved on this device: sending them, and the note about them ----
+async function flushSlipOutbox() {
+  if (!window.currentEmail || !window.currentIdToken || navigator.onLine === false) { renderSlipOutbox(); return; }
+  try { await TroopOffline.flush(window.currentEmail, slipSender, renderSlipOutbox); } catch (e) { /* try again later */ }
+}
+
+async function renderSlipOutbox() {
+  const note = document.getElementById('slipOutboxNote');
+  if (!note) return;
+  let items = [];
+  try { items = window.currentEmail ? await TroopOffline.outbox.list(window.currentEmail) : []; } catch (e) { /* no offline storage */ }
+  const pending = items.filter(i => i.status === 'pending').length;
+  const failed = items.filter(i => i.status === 'failed').length;
+  const parts = [];
+  if (pending) parts.push(pending + ' saved item' + (pending === 1 ? ' is' : 's are') + ' waiting to be sent' + (navigator.onLine === false ? ' (you are offline)' : ''));
+  if (failed) parts.push(failed + ' saved item' + (failed === 1 ? ' was' : 's were') + ' not accepted: open the Troop Hub to review ' + (failed === 1 ? 'it' : 'them'));
+  note.textContent = parts.length ? parts.join('. ') + '.' : '';
+  note.hidden = !parts.length;
+}
+
+window.addEventListener('online', flushSlipOutbox);
+window.addEventListener('offline', renderSlipOutbox);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') flushSlipOutbox(); });
 
 function setSubmitting(on) {
   let overlay = document.getElementById('submitOverlay');
@@ -499,6 +558,7 @@ function handleCredentialResponse(response) {
   }
 
   loadSlipData(responsePayload.sub);
+  flushSlipOutbox();
 
   document.querySelectorAll('#permissionForm input[name*="signature" i]').forEach(el => {
     el.value = '';
@@ -519,7 +579,9 @@ function setSignedInUI(label) {
 function clearSignedInState() {
   window.currentIdToken = null;
   window.currentUserGoogleId = null;
+  window.currentEmail = '';
   setUserProfiles({});
+  renderSlipOutbox();
   setSignedInUI(null);
 }
 
@@ -656,6 +718,7 @@ function collectProfile() {
 
 // After a successful submit, keep the saved copy on this device in step with what the server saved.
 function rememberProfileLocally(profile) {
+  if (!window.currentUserGoogleId) return; // signed out meanwhile (an expired sign-in): nothing to key it under
   const { kind, profileData } = profile;
   const name = profileNameOf(kind, profileData);
   const list = (window.userProfiles[kind] || []).slice();

@@ -1,9 +1,9 @@
 // Offline support shared by every page (loaded after auth.js):
 //   - a small per-user cache in localStorage (the hub session: permissions, trips, add-trip
 //     templates; a trip's float-plan roster), so pages open and show the last known data with no signal
-//   - an outbox in IndexedDB: entries made while offline (receipts, payments, reimbursements) are
-//     saved on the device with a unique ID and sent when the connection returns; the server ignores a
-//     repeat of an ID it already has, so a retry can never create a second row
+//   - an outbox in IndexedDB: entries made while offline (receipts, payments, reimbursements, permission
+//     slips) are saved on the device with a unique ID and sent when the connection returns; the server
+//     ignores a repeat of an ID it already has, so a retry can never create a second row
 //   - wipeAll(): everything above is deleted when someone signs out on purpose
 // The service worker (sw.js) is registered here too; it keeps the pages themselves available offline.
 (function (root) {
@@ -98,6 +98,73 @@
       return result;
     }
 
+    // POSTs JSON to the Apps Script web app and returns the parsed reply. Sent as text/plain so the
+    // browser skips the CORS preflight Apps Script can't answer. It only throws when there is no usable
+    // reply, with a flag saying why: err.network (no connection, or it timed out) or err.retry (a bad
+    // HTTP status or an unreadable reply). A reply that says "error" is returned for the caller to read.
+    async function send(url, body, timeoutMs) {
+      const AC = env.AbortController || root.AbortController;
+      const ctl = timeoutMs && AC ? new AC() : null;
+      const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+      let res;
+      try {
+        res = await (env.fetch || root.fetch)(url, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(body),
+          signal: ctl ? ctl.signal : undefined
+        });
+      } catch (e) {
+        throw Object.assign(new Error("There is no connection to the server."), { network: true });
+      } finally { if (timer) clearTimeout(timer); }
+      if (!res.ok) throw Object.assign(new Error("Server error " + res.status), { retry: true });
+      try { return await res.json(); }
+      catch (e) { throw Object.assign(new Error("The server sent a reply that could not be read."), { retry: true }); }
+    }
+
+    // Builds the sender flush() uses: it knows how to send each kind of queued item, with the person's
+    // current token (never stored in the outbox, since tokens expire).
+    //   opts: { url, getToken(), onSignin() }   onSignin runs when the server says the sign-in has expired
+    // Kinds: "slipSubmit" is a permission slip (the raw payload, with _idToken); any other kind is an
+    // action name such as "hubSubmit" (the payload plus { action, idToken }).
+    // Resolves { ok: true } | { ok: false, retry: true, signin?, message } | { ok: false, message }.
+    function makeSender(opts) {
+      return async function sender(item) {
+        const token = opts.getToken();
+        const body = item.kind === "slipSubmit"
+          ? Object.assign({}, item.payload, { _idToken: token })
+          : Object.assign({}, item.payload, { action: item.kind, idToken: token });
+        let d;
+        try { d = await send(opts.url, body, 60000); }
+        catch (e) { return { ok: false, retry: true, message: e.message }; }
+        if (d && d.status === "success") return { ok: true };
+        if (d && d.code === "signin") {
+          if (opts.onSignin) opts.onSignin();
+          return { ok: false, retry: true, signin: true, message: d.message };
+        }
+        return { ok: false, message: (d && (d.message || d.error)) || "The server did not accept this." };
+      };
+    }
+
+    // The whole "enter something while maybe offline" step: write the item to the outbox, try to send it
+    // now, and say how it went. Resolves
+    //   { sent: true }                  it reached the server (and is no longer queued)
+    //   { queued: true, signin }        no usable reply: it stays queued and flush() will send it
+    //   { refused: true, message }      the server said no: it is removed so the person can fix it and retry
+    //   { failed: true, signin, message }  no usable reply AND it could not be saved (no offline storage here)
+    async function submitNow(item, sender) {
+      let saved = null;
+      try { saved = await outbox.add(item); } catch (e) { /* no offline storage: just try to send */ }
+      const r = await sender(saved || item);
+      if (r.ok) {
+        if (saved) await outbox.remove(saved.id);
+        return { sent: true };
+      }
+      if (r.retry) return saved ? { queued: true, signin: !!r.signin } : { failed: true, signin: !!r.signin, message: r.message };
+      if (saved) await outbox.remove(saved.id);
+      return { refused: true, message: r.message };
+    }
+
     function uuid() {
       const c = env.crypto || root.crypto;
       if (c && c.randomUUID) return c.randomUUID();
@@ -106,7 +173,7 @@
       return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
     }
 
-    return { cacheGet, cacheSet, cacheStale, wipeAll, outbox, flush, uuid };
+    return { cacheGet, cacheSet, cacheStale, wipeAll, outbox, flush, send, makeSender, submitNow, uuid };
   }
 
   // ---- IndexedDB store for the outbox (browser only) ----

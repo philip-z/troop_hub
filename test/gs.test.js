@@ -129,7 +129,7 @@ function makeHub() {
   const photoCalls = [];
   const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Auth.gs", "Code.gs"], {
     logEvent_: (stage, detail) => logged.push([stage, detail]),
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     Utilities: { base64EncodeWebSafe: () => "rev", computeDigest: () => "d", DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 } }
   });
   const ss = fakeSpreadsheet();
@@ -540,6 +540,50 @@ test("slip submission: a changed or missing trip revision is accepted and flagge
   assert.strictEqual(plain(ctx.handlePermissionPost_("{}", Object.assign({ _tripRevision: "new" }, base))).status, "success");
   assert.ok(!flagsOf().includes("Trip"));
   assert.strictEqual(ss.sheets.Responses.rows.length, 4);
+});
+
+test("slip submission from a device: Client ID and Entered At columns, and a retry is not written twice", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "r" });
+  const signed = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const slip = (extra) => Object.assign({ _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" }, extra);
+  const send = (extra) => plain(ctx.handlePermissionPost_("{}", slip(extra)));
+
+  assert.deepStrictEqual(send({ _clientId: "slip-device-01", _enteredAt: signed }), { status: "success" });
+  assert.deepStrictEqual(send({ _clientId: "slip-device-01", _enteredAt: signed }), { status: "success", duplicate: true });
+  const rows = ss.sheets.Responses.rows;
+  assert.strictEqual(rows.length, 2); // header + one row
+  const head = plain(rows[0]);
+  assert.strictEqual(rows[1][head.indexOf("Client ID")], "slip-device-01");
+  assert.strictEqual(new Date(rows[1][head.indexOf("Entered At")]).toISOString(), signed);
+  assert.ok(!plain(rows[1]).join("|").includes("_clientId"));
+
+  // a slip with no ID (an old page) is still accepted, and two of them are two rows
+  send({}); send({});
+  assert.strictEqual(ss.sheets.Responses.rows.length, 4);
+  // the browser can't fill the server's columns by naming a form field the same way
+  send({ "client id": "spoof-12345", "ENTERED AT": "yesterday" });
+  const last = plain(ss.sheets.Responses.rows[4]);
+  assert.ok(!last.includes("spoof-12345") && !last.includes("yesterday"));
+});
+
+test("slip submission: a slip signed offline is accepted after the trip closed; an on-time one is not", () => {
+  const { ctx, ss, logged } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "FALSE", _tripRevision: "r" });
+  const slip = (extra) => Object.assign({ _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" }, extra);
+  const hoursAgo = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({}))).code, "closed");
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({ _clientId: "slip-device-02", _enteredAt: new Date().toISOString() }))).code, "closed");
+  assert.strictEqual(ss.sheets.Responses, undefined);
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({ _clientId: "slip-device-03", _enteredAt: hoursAgo }))).status, "success");
+  const rows = ss.sheets.Responses.rows;
+  assert.ok(rows[1][plain(rows[0]).indexOf("Flags")].includes("Trip closed before the slip was sent"));
+  assert.ok(logged.some((l) => l[0] === "late slip accepted"));
 });
 
 test("hubSessionOrNull_ bundles permissions, trips and templates, and never throws", () => {

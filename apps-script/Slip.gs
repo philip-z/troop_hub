@@ -95,6 +95,9 @@ function handlePermissionPost_(raw, data) {
   var slipSnapshot = data._slipSnapshot; // read before sanitizeFields_ drops '_' keys
   var profileSubmit = data._profile;     // { kind, data }: the inputs marked data-profile, see below
   var submittedTripId = data._tripId;
+  // The device's unique ID for this slip and when it was signed there (see hubMeta_ in Hub.gs): a slip
+  // signed offline can arrive much later, and a retry must not be written twice.
+  var slipMeta = hubMeta_({ clientId: data._clientId, enteredAt: data._enteredAt });
   data = sanitizeFields_(data, flags);
 
   var slipKind = SLIP_KINDS[String(data[SLIP_FORM_TYPE_COLUMN]).toLowerCase()] || SLIP_KINDS.youth;
@@ -105,7 +108,11 @@ function handlePermissionPost_(raw, data) {
   var trip = getTripConfig_(ss, submittedTripId);
   if (!trip) return jsonOut_({ status: 'error', code: 'not_found', message: 'Trip not found.' });
   if (!isTruthy_(trip.acceptingResponses)) {
-    return jsonOut_({ status: 'error', code: 'closed', message: 'This trip is no longer accepting permission slips.' });
+    // A slip signed while offline can reach the server after the trip stopped taking slips. It was
+    // signed in time, so it is kept and flagged rather than lost.
+    if (!slipMeta.late) return jsonOut_({ status: 'error', code: 'closed', message: 'This trip is no longer accepting permission slips.' });
+    flags.push('Trip closed before the slip was sent');
+    logEvent_('late slip accepted', 'trip ' + trip.tripId + ' closed, signed ' + slipMeta.enteredAt.toISOString());
   }
   // A slip is accepted even if the trip was edited while the person was filling it out (or
   // while they were offline): what they actually saw and signed is recorded in wordingHash, and
@@ -119,23 +126,33 @@ function handlePermissionPost_(raw, data) {
   data['wordingHash'] = wordingHash_(slipSnapshot);
   if (!data['wordingHash']) flags.push('No wording hash');
   data['Flags'] = flags.join('; ');
+  if (slipMeta.enteredAt) data[SERVER_COLUMNS.enteredAt] = slipMeta.enteredAt;
+  if (slipMeta.clientId) data[SERVER_COLUMNS.clientId] = slipMeta.clientId;
 
-  var sheet = getOrCreateSheet_(ss, 'Responses', true);
+  // The lock only makes the repeat check and the append one step, so it is tried briefly: a burst of
+  // parents must never be turned away, and without it the worst case is the old behavior.
+  var lock = LockService.getScriptLock();
+  var haveLock = lock.tryLock(10000);
+  try {
+    var sheet = getOrCreateSheet_(ss, 'Responses', true);
+    if (slipMeta.clientId && columnHasValue_(sheet, SERVER_COLUMNS.clientId, slipMeta.clientId)) {
+      return jsonOut_({ status: 'success', duplicate: true }); // a retry of a slip that was already written
+    }
 
-  // Ensure "Timestamp" and all incoming field keys exist in row 1
-  var incomingKeys = Object.keys(data);
-  var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
+    // Ensure "Timestamp" and all incoming field keys exist in row 1
+    var incomingKeys = Object.keys(data);
+    var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
 
-  var headerMap = {};
-  headers.forEach(function(h, idx) { headerMap[h.toLowerCase()] = idx; });
+    var rowData = headers.map(function(header) {
+      if (header.toLowerCase() === 'timestamp') return new Date();
+      var val = data[header];
+      return (val !== undefined && val !== null) ? val : '';
+    });
 
-  var rowData = headers.map(function(header) {
-    if (header.toLowerCase() === 'timestamp') return new Date();
-    var val = data[header];
-    return (val !== undefined && val !== null) ? val : '';
-  });
-
-  sheet.appendRow(rowData);
+    sheet.appendRow(rowData);
+  } finally {
+    if (haveLock) lock.releaseLock();
+  }
 
   // The signed-in person's profile is saved in this same call, so a submit is one round trip.
   // It is not derived from the response: slip.js sends exactly the inputs marked data-profile in
@@ -162,11 +179,14 @@ function sanitizeFields_(input, flags) {
   var blocked = { 'action': true, 'idToken': true, 'googleUserId': true,
                   'Flags': true, 'PDF Link': true, 'tripId': true, 'formVersion': true, 'wordingHash': true };
   blocked[HONEYPOT_FIELD] = true;
+  // The columns the server fills from the device's metadata (any capitalization).
+  var reservedLower = {};
+  [SERVER_COLUMNS.enteredAt, SERVER_COLUMNS.clientId].forEach(function(n) { reservedLower[n.toLowerCase()] = true; });
 
   var clean = {};
   var count = 0;
   Object.keys(input || {}).forEach(function(key) {
-    if (key.charAt(0) === '_' || blocked[key] || key.length > MAX_KEY_LENGTH) return;
+    if (key.charAt(0) === '_' || blocked[key] || reservedLower[key.toLowerCase()] || key.length > MAX_KEY_LENGTH) return;
     if (count >= MAX_FIELDS) {
       if (flags.indexOf('Too many fields') === -1) flags.push('Too many fields');
       return;

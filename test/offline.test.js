@@ -23,10 +23,22 @@ function memoryStore() {
     list: async () => Array.from(m.values()).map((i) => structuredClone(i))
   };
 }
-function make(initialLocal) {
+function make(initialLocal, fetchImpl) {
   const local = fakeStorage(initialLocal), session = fakeStorage();
   const store = memoryStore();
-  return { O: create({ localStorage: local, sessionStorage: session, outboxStore: store }), local, session, store };
+  return { O: create({ localStorage: local, sessionStorage: session, outboxStore: store, fetch: fetchImpl }), local, session, store };
+}
+// A fetch that records what was sent and answers with `reply` (a status/body, or a function, or an Error to throw).
+function fakeFetch(reply) {
+  const calls = [];
+  const fn = async (url, opts) => {
+    calls.push({ url, opts, body: JSON.parse(opts.body) });
+    const r = typeof reply === "function" ? reply(calls.length) : reply;
+    if (r instanceof Error) throw r;
+    return { ok: r.ok !== false, status: r.status || 200, json: async () => { if (r.unreadable) throw new Error("bad json"); return r.body; } };
+  };
+  fn.calls = calls;
+  return fn;
 }
 const item = (id, email, at) => ({ id, email, kind: "hubSubmit", payload: { id }, createdAt: at || "2026-11-10T10:00:00.000Z" });
 
@@ -122,6 +134,97 @@ test("only one flush runs at a time", async () => {
   release();
   assert.deepStrictEqual(await first, { sent: 1, failed: 0 });
   assert.strictEqual(calls, 1);
+});
+
+test("send returns the parsed reply and flags why there was none", async () => {
+  const ok = fakeFetch({ body: { status: "error", code: "not_allowed" } });
+  const { O } = make({}, ok);
+  assert.deepStrictEqual(await O.send("https://x/exec", { a: 1 }), { status: "error", code: "not_allowed" }); // a server "error" is a reply, not a failure
+  assert.deepStrictEqual([ok.calls[0].url, ok.calls[0].body, ok.calls[0].opts.headers["Content-Type"]], ["https://x/exec", { a: 1 }, "text/plain;charset=utf-8"]);
+
+  const flagsOf = async (impl) => { try { await make({}, impl).O.send("u", {}); return "no error"; } catch (e) { return [!!e.network, !!e.retry]; } };
+  assert.deepStrictEqual(await flagsOf(fakeFetch(new TypeError("Failed to fetch"))), [true, false]);
+  assert.deepStrictEqual(await flagsOf(fakeFetch({ ok: false, status: 502 })), [false, true]);
+  assert.deepStrictEqual(await flagsOf(fakeFetch({ unreadable: true })), [false, true]);
+});
+
+test("send gives up after the timeout and reports no connection", async () => {
+  const slow = (url, opts) => new Promise((resolve, reject) => { opts.signal.addEventListener("abort", () => reject(new Error("aborted"))); });
+  const { O } = make({}, slow);
+  await assert.rejects(() => O.send("u", {}, 20), (e) => e.network === true);
+});
+
+test("makeSender sends each kind with the current token and classifies the outcome", async () => {
+  let token = "tok-1", signedOut = 0;
+  const fetchImpl = fakeFetch((n) => ({ body: { status: "success" } }));
+  const { O } = make({}, fetchImpl);
+  const sender = O.makeSender({ url: "https://x/exec", getToken: () => token, onSignin: () => { signedOut++; } });
+
+  assert.deepStrictEqual(await sender({ kind: "hubSubmit", payload: { kind: "receipt", tripId: "1", clientId: "c-0000001" } }), { ok: true });
+  assert.deepStrictEqual(fetchImpl.calls[0].body, { kind: "receipt", tripId: "1", clientId: "c-0000001", action: "hubSubmit", idToken: "tok-1" });
+
+  token = "tok-2"; // a token that was renewed since the item was queued is the one that is used
+  assert.deepStrictEqual(await sender({ kind: "slipSubmit", payload: { "Youth Name": "Sam", _clientId: "c-0000002" } }), { ok: true });
+  assert.deepStrictEqual(fetchImpl.calls[1].body, { "Youth Name": "Sam", _clientId: "c-0000002", _idToken: "tok-2" });
+  assert.ok(!("action" in fetchImpl.calls[1].body)); // a slip is posted without an action, like the form always was
+
+  const withReply = (reply) => make({}, fakeFetch(reply)).O.makeSender({ url: "u", getToken: () => "t", onSignin: () => { signedOut++; } })({ kind: "hubSubmit", payload: {} });
+  assert.deepStrictEqual(await withReply(new TypeError("offline")), { ok: false, retry: true, message: "There is no connection to the server." });
+  assert.deepStrictEqual(await withReply({ ok: false, status: 500 }), { ok: false, retry: true, message: "Server error 500" });
+  assert.deepStrictEqual(await withReply({ body: { status: "error", code: "not_found", message: "Trip not found." } }), { ok: false, message: "Trip not found." });
+  assert.strictEqual(signedOut, 0);
+  const expired = await withReply({ body: { status: "error", code: "signin", message: "Please sign in." } });
+  assert.deepStrictEqual(expired, { ok: false, retry: true, signin: true, message: "Please sign in." });
+  assert.strictEqual(signedOut, 1);
+});
+
+test("flush with makeSender keeps a slip queued when offline and sends it once online", async () => {
+  let online = false;
+  const fetchImpl = fakeFetch(() => (online ? { body: { status: "success" } } : new TypeError("offline")));
+  const { O } = make({}, fetchImpl);
+  const sender = O.makeSender({ url: "u", getToken: () => "t" });
+  await O.outbox.add({ id: "slip-0001", email: "mom@x.com", kind: "slipSubmit", payload: { _clientId: "slip-0001" }, createdAt: "2026-11-10T10:00:00.000Z" });
+  await O.outbox.add({ id: "rcpt-0001", email: "mom@x.com", kind: "hubSubmit", payload: { clientId: "rcpt-0001" }, createdAt: "2026-11-10T10:01:00.000Z" });
+  assert.deepStrictEqual(await O.flush("mom@x.com", sender), { sent: 0, failed: 0 });
+  assert.strictEqual((await O.outbox.list("mom@x.com")).length, 2); // nothing lost while offline
+  online = true;
+  assert.deepStrictEqual(await O.flush("mom@x.com", sender), { sent: 2, failed: 0 });
+  assert.strictEqual(await O.outbox.countAll(), 0);
+  assert.deepStrictEqual(fetchImpl.calls.slice(-2).map((c) => Object.keys(c.body).filter((k) => /clientId|_clientId/i.test(k))[0]), ["_clientId", "clientId"]);
+});
+
+test("submitNow: sent, queued, refused, and no offline storage", async () => {
+  const item = (id) => ({ id, email: "mom@x.com", kind: "slipSubmit", payload: { _clientId: id }, createdAt: "2026-11-10T10:00:00.000Z" });
+  const { O } = make();
+  const ok = async () => ({ ok: true });
+
+  assert.deepStrictEqual(await O.submitNow(item("sent-00001"), ok), { sent: true });
+  assert.strictEqual(await O.outbox.countAll(), 0); // sent: not left behind
+
+  const offline = async () => ({ ok: false, retry: true });
+  assert.deepStrictEqual(await O.submitNow(item("queue-0001"), offline), { queued: true, signin: false });
+  assert.deepStrictEqual((await O.outbox.list()).map((i) => [i.id, i.status]), [["queue-0001", "pending"]]);
+
+  const expired = async () => ({ ok: false, retry: true, signin: true });
+  assert.deepStrictEqual(await O.submitNow(item("queue-0002"), expired), { queued: true, signin: true });
+
+  const refused = async () => ({ ok: false, message: "Trip not found." });
+  assert.deepStrictEqual(await O.submitNow(item("refuse-001"), refused), { refused: true, message: "Trip not found." });
+  assert.deepStrictEqual((await O.outbox.list()).map((i) => i.id).sort(), ["queue-0001", "queue-0002"]); // a refused item isn't kept
+
+  // the sender is handed the saved item (with its status fields), and that is what a later flush resends
+  let seen;
+  await O.submitNow(item("seen-00001"), async (i) => { seen = i; return { ok: true }; });
+  assert.deepStrictEqual([seen.id, seen.status, seen.attempts], ["seen-00001", "pending", 0]);
+});
+
+test("submitNow without offline storage still sends, and reports a failure instead of queueing", async () => {
+  const noStore = { add: async () => { throw new Error("none"); }, put: async () => {}, remove: async () => {}, clear: async () => {}, list: async () => [] };
+  const O = create({ localStorage: fakeStorage(), sessionStorage: fakeStorage(), outboxStore: noStore });
+  const it = { id: "none-00001", email: "a@x.com", kind: "hubSubmit", payload: {}, createdAt: "2026-11-10T10:00:00.000Z" };
+  assert.deepStrictEqual(await O.submitNow(it, async () => ({ ok: true })), { sent: true });
+  assert.deepStrictEqual(await O.submitNow(it, async () => ({ ok: false, retry: true, message: "offline" })), { failed: true, signin: false, message: "offline" });
+  assert.deepStrictEqual(await O.submitNow(it, async () => ({ ok: false, message: "No." })), { refused: true, message: "No." });
 });
 
 test("uuid gives IDs the server accepts as clientId", () => {

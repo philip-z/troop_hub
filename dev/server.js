@@ -243,12 +243,17 @@ function slipPost(data) {
   if (!verify(data._idToken)) return err("signin", "Your sign-in has expired. Please sign in again; your entries are still on the form.");
   const trip = tripConfig(data._tripId);
   if (!trip) return err("not_found", "Trip not found.");
-  if (!truthy(trip.acceptingResponses)) return err("closed", "This trip is no longer accepting permission slips.");
+  // A slip signed offline can arrive after the trip closed: it is kept (the real script also flags it).
+  const meta = gs.hubMeta_({ clientId: data._clientId, enteredAt: data._enteredAt });
+  if (!truthy(trip.acceptingResponses) && !meta.late) return err("closed", "This trip is no longer accepting permission slips.");
+  if (meta.clientId && db.tables.Responses.some((r) => r["Client ID"] === meta.clientId)) return { status: "success", duplicate: true };
   // A changed trip revision is accepted (the real script adds a note to the Flags column).
   const server = new Set(["action", "idToken", "googleUserId", "Flags", "PDF Link", "tripId", "formVersion", "wordingHash", "website_url"]);
   const row = { Timestamp: new Date().toISOString() };
-  Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
+  Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k) && !["client id", "entered at"].includes(k.toLowerCase())) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
   row.tripId = trip.tripId;
+  if (meta.enteredAt) row["Entered At"] = meta.enteredAt.toISOString();
+  if (meta.clientId) row["Client ID"] = meta.clientId;
   db.tables.Responses.push(row);
   // The profile is saved in the same call (never blocking the slip), like handlePermissionPost_.
   const info = data._profile && typeof data._profile === "object" && !data.website_url ? verify(data._idToken) : null;
