@@ -13,14 +13,10 @@ window.TroopAuth = (function () {
     return claims;
   }
 
-  async function post(body) {
-    const res = await fetch(window.TROOP_CONFIG.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    return res.json();
+  // The shared transport (offline.js, loaded right after this file on every page); it throws a
+  // readable error when there is no usable reply.
+  function post(body) {
+    return window.TroopOffline.send(window.TROOP_CONFIG.APPS_SCRIPT_URL, body);
   }
 
   let emailBox = null;
@@ -33,13 +29,21 @@ window.TroopAuth = (function () {
     (persist ? localStorage : sessionStorage).setItem(KEY, token);
   }
 
+  // The server sends the hub session (permissions, trips) along with a new token, so the page can
+  // open without another call (and another wait for the script to wake up). Saved like hub.js saves it.
+  function keepSession(token, d) {
+    try {
+      if (d && d.session && window.TroopOffline) window.TroopOffline.cacheSet(parseJwt(token).email, "session", d.session);
+    } catch (e) { /* the page just asks for it */ }
+  }
+
   // Google ID tokens last ~1 hour, so "remember me" swaps one for a 30-day token from our server.
   async function onGoogleCredential(credential) {
     let token = credential;
     if (remember.checked) {
       try {
         const d = await post({ action: "authExchange", idToken: credential });
-        if (d.status === "success") token = d.token;
+        if (d.status === "success") { token = d.token; keepSession(token, d); }
       } catch (e) { /* keep the Google token for this tab */ }
     }
     save(token, remember.checked && token !== credential);
@@ -85,6 +89,7 @@ window.TroopAuth = (function () {
         const d = await post({ action: "authVerifyCode", email: email.value, code: code.value, remember: remember.checked });
         if (d.status === "error") { say(d.message, true); return; }
         code.value = ""; say("");
+        keepSession(d.token, d);
         save(d.token, remember.checked);
         onSignInCb(d.token, parseJwt(d.token));
       } catch (e) { say(e.message, true); }
@@ -131,5 +136,19 @@ window.TroopAuth = (function () {
     if (onSignOutCb) onSignOutCb();
   }
 
-  return { start, signOut, parseJwt, getToken: stored };
+  // What the "Sign out" buttons call. Unlike signOut(), which also runs when a session simply
+  // expires (and must leave the offline outbox and cache alone), this is the person choosing to
+  // leave: saved trips, rosters, profiles and drafts are deleted from this device (offline.js).
+  async function userSignOut() {
+    const offline = window.TroopOffline;
+    if (offline) {
+      let pending = 0;
+      try { pending = await offline.outbox.countAll(); } catch (e) { /* no offline storage */ }
+      if (pending && !window.confirm(pending + " saved item" + (pending === 1 ? " has" : "s have") + " not been sent yet and will be deleted if you sign out. Sign out anyway?")) return;
+      try { await offline.wipeAll(); } catch (e) { /* nothing more to clear */ }
+    }
+    signOut();
+  }
+
+  return { start, signOut, userSignOut, parseJwt, getToken: stored };
 })();

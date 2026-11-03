@@ -1,17 +1,15 @@
 (function () {
   const C = window.TROOP_CONFIG;
   const $ = (id) => document.getElementById(id);
-  let idToken = null, trips = [], currentTripResponses = [];
+  let idToken = null, userEmail = "", currentTripResponses = [];
 
+  // The shared transport (offline.js) flags a missing reply as err.network or err.retry.
   async function api(action, payload) {
-    const res = await fetch(C.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    const d = await res.json();
-    if (d.status === "error" || d.error) throw new Error(d.message || d.error);
+    const d = await TroopOffline.send(C.APPS_SCRIPT_URL, Object.assign({}, payload, { action, idToken }));
+    if (d.status === "error" || d.error) {
+      if (d.code === "signin") TroopAuth.signOut();
+      throw Object.assign(new Error(d.message || d.error), { code: d.code });
+    }
     return d;
   }
 
@@ -19,6 +17,7 @@
 
   async function onSignIn(token, claims) {
     idToken = token;
+    userEmail = String(claims.email || "").toLowerCase();
     const email = claims.email || claims.name || "";
     setSignedInUI(email);
     $("app").hidden = false;
@@ -28,10 +27,10 @@
       return;
     }
 
-    // 1. Load trip metadata instantly from sessionStorage cache
+    // 1. Load trip metadata instantly from the session saved on this device (by hub.js)
     try {
-      const cachedTrips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-      const trip = cachedTrips.find(t => String(t.tripId) === String(TRIP_ID));
+      const saved = TroopOffline.cacheGet(userEmail, 'session');
+      const trip = ((saved && saved.data.trips) || []).find(t => String(t.tripId) === String(TRIP_ID));
       if (trip) {
         $("planTripTitle").textContent = trip.tripTitle;
         $("planTripDate").textContent = trip.tripDates;
@@ -41,17 +40,33 @@
 
     // 2. Fetch responses in a single API call
     try {
-      const res = await api("floatPlanGetResponses", { tripId: TRIP_ID });
+      const res = await api("hubFloatPlan", { tripId: TRIP_ID });
       currentTripResponses = res.responses || [];
+      TroopOffline.cacheSet(userEmail, "roster:" + TRIP_ID, currentTripResponses);
+      $("floatPlanOffline").hidden = true;
       renderFloatPlanData(currentTripResponses);
-      loadGearChecklist();
+      loadGearChecklist(res.equipment && res.equipment.status === "success" ? res.equipment.items : null);
       $("floatPlanContent").hidden = false;
     } catch (err) {
       console.error("Error loading responses:", err);
-      renderFloatPlanData([]);
-      loadGearChecklist();
-      $("floatPlanContent").hidden = false;
+      // No connection (or the server isn't answering): use the roster this device saved last time.
+      const saved = (err.network || err.retry) && TroopOffline.cacheGet(userEmail, "roster:" + TRIP_ID);
+      if (saved) {
+        currentTripResponses = saved.data;
+        $("floatPlanError").hidden = true;
+        $("floatPlanOffline").textContent = "No connection: showing the roster saved on this device on " + new Date(saved.at).toLocaleString() + ". It may be out of date.";
+        $("floatPlanOffline").hidden = false;
+        renderFloatPlanData(currentTripResponses);
+        loadGearChecklist();
+        $("floatPlanContent").hidden = false;
+        return;
+      }
+      // Say why (e.g. not a leader who manages trips) instead of showing an empty roster as if it were real.
+      $("floatPlanError").textContent = "Could not load the roster: " + err.message;
+      $("floatPlanError").hidden = false;
+      return;
     }
+    $("floatPlanError").hidden = true;
   }
 
   function onSignOut() {
@@ -178,24 +193,14 @@
 
   let troopGearList = [];
 
-  async function loadGearChecklist() {
-    try {
-      const cached = sessionStorage.getItem('troop58_equipment');
-      if (cached) {
-        troopGearList = JSON.parse(cached);
-        renderGearChecklist();
-        return;
-      }
-      const res = await api("hubListEquipment");
-      if (res && Array.isArray(res.items) && res.items.length > 0) {
-        troopGearList = res.items.map(i => ({ name: i.item, qty: i.quantity || '', checked: false })).filter(i => i.name);
-        sessionStorage.setItem('troop58_equipment', JSON.stringify(troopGearList));
-      } else {
-        troopGearList = [];
-      }
-    } catch (e) {
-      console.log("Could not load equipment list.");
-      troopGearList = [];
+  // The equipment list arrives with the roster (items), or is the copy this device saved last time.
+  function loadGearChecklist(items) {
+    if (Array.isArray(items)) {
+      troopGearList = items.map(i => ({ name: i.item, qty: i.quantity || '', checked: false })).filter(i => i.name);
+      TroopOffline.cacheSet(userEmail, 'gear', troopGearList);
+    } else {
+      const saved = TroopOffline.cacheGet(userEmail, 'gear');
+      troopGearList = saved ? saved.data : [];
     }
     renderGearChecklist();
   }
@@ -259,5 +264,5 @@
     onSignIn: (token, claims) => onSignIn(token, claims),
     onSignOut: onSignOut
   });
-  $("signOutBtn").onclick = TroopAuth.signOut;
+  $("signOutBtn").onclick = TroopAuth.userSignOut;
 })();

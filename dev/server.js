@@ -1,6 +1,6 @@
 // Local dev server: static files + an in-memory mock of the Apps Script web app.
 //   npm run dev                           (http://localhost:5173)
-//   LEADERS=a@x.com,b@x.com:recordPayments+recordReimbursements npm run dev   to change the leaders and their permissions
+//   LEADERS=a@x.com,b@x.com:recordReimbursements npm run dev   to change the leaders and their permissions
 // Mirrors the routes and response shapes in apps-script/*.gs, but is NOT the real
 // backend: tokens are not verified with Google, and data resets on restart.
 const http = require("node:http");
@@ -12,9 +12,9 @@ const { loadGs } = require("./gs-loader.js");
 const ROOT = path.join(__dirname, "..");
 const SITE = path.join(ROOT, "docs");
 const PORT = Number(process.env.PORT) || 5173;
-// LEADERS=email[:perm+perm],... ; no ":" means all permissions. Permissions: addTrips, recordPayments, recordReimbursements.
-const PERMS = ["addTrips", "recordPayments", "recordReimbursements"];
-const LEADERS = new Map((process.env.LEADERS || "leader@test.com,treasurer@test.com:recordPayments+recordReimbursements").split(",").map((s) => {
+// LEADERS=email[:perm+perm],... ; no ":" means all permissions. Permissions: manageTrips, recordReimbursements.
+const PERMS = ["manageTrips", "recordReimbursements"];
+const LEADERS = new Map((process.env.LEADERS || "leader@test.com,treasurer@test.com:recordReimbursements").split(",").map((s) => {
   const [email, p] = s.trim().split(":");
   return [email.toLowerCase(), p === undefined ? PERMS : p.split("+").filter((x) => PERMS.includes(x))];
 }));
@@ -93,7 +93,7 @@ function authVerifyCode(data) {
   if (String(data.code || "").replace(/\s+/g, "") !== MOCK_CODE || !email) return err("bad_code", "That code is wrong or has expired. Request a new one.");
   const ttl = data.remember === true ? 30 * 86400 : 7200;
   const payload = Buffer.from(JSON.stringify({ email, exp: Math.floor(Date.now() / 1000) + ttl })).toString("base64url");
-  return { status: "success", token: "ts1." + payload + ".mock" };
+  return { status: "success", token: "ts1." + payload + ".mock", session: sessionFor(email) };
 }
 function authExchange(data) {
   if (String(data.idToken).startsWith("ts1.")) return err("signin", "Please sign in with Google.");
@@ -101,8 +101,12 @@ function authExchange(data) {
   if (!info || !info.emailVerified) return SIGNIN_ERR;
   const c = JSON.parse(Buffer.from(String(data.idToken).split(".")[1], "base64url").toString());
   const payload = Buffer.from(JSON.stringify({ email: info.email, sub: info.sub, name: c.name, exp: Math.floor(Date.now() / 1000) + 30 * 86400 })).toString("base64url");
-  return { status: "success", token: "ts1." + payload + ".mock" };
+  return { status: "success", token: "ts1." + payload + ".mock", session: sessionFor(info.email) };
 }
+const sessionFor = (email) => {
+  const permissions = permissionsFor(email);
+  return { status: "success", email, permissions, trips: db.trips.map((t) => tripSummary(t)), ...(permissions.manageTrips ? { templates: tripTemplates() } : {}) };
+};
 const permissionsFor = (email) => Object.fromEntries(PERMS.map((p) => [p, (LEADERS.get(email) || []).includes(p)]));
 const SIGNIN_ERR = err("signin", "Your sign-in has expired or is invalid. Please sign in again.");
 
@@ -122,13 +126,7 @@ function hub(data) {
   switch (data.action) {
     case "hubSession":
       a = auth(data, ""); if (a.error) return a.error;
-      return {
-        status: "success",
-        email: a.info.email,
-        permissions: a.info.permissions,
-        trips: db.trips.map((t) => tripSummary(t)),
-        ...(a.info.permissions.addTrips ? { templates: tripTemplates() } : {})
-      };
+      return sessionFor(a.info.email);
     case "hubListTrips":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", trips: db.trips.map((t) => tripSummary(t)) };
@@ -138,15 +136,23 @@ function hub(data) {
     case "hubListRecipes":
       a = auth(data, ""); if (a.error) return a.error;
       return { status: "success", items: gs.tableRows_(grid(db.recipes)) };
+    case "hubLists":
+      a = auth(data, ""); if (a.error) return a.error;
+      return { status: "success", equipment: { status: "success", items: gs.tableRows_(grid(db.equipment)) }, recipes: { status: "success", items: gs.tableRows_(grid(db.recipes)) } };
+    case "hubFloatPlan":
+      a = auth(data, "manageTrips"); if (a.error) return a.error;
+      return { status: "success", responses: gs.tripResponsesFrom_(grid(db.tables.Responses), data.tripId), equipment: { status: "success", items: gs.tableRows_(grid(db.equipment)) } };
     case "hubSubmit": {
       const spec = HUB_RECORDS[data.kind];
       if (!spec) return err("invalid", "Unknown record type.");
       a = auth(data, spec.permission); if (a.error) return a.error;
       const trip = tripConfig(data.tripId);
       if (!trip) return err("not_found", "Trip not found.");
-      if (spec.tripFlag && !truthy(trip[spec.tripFlag])) return err("closed", spec.closedMessage);
-      const base = gs.hubServerFields_(spec, trip, "", a.info.email);
-      const clean = gs.cleanRecordFields_(data.values, Object.keys(base.before).concat(Object.keys(base.after)));
+      const meta = gs.hubMeta_(data);
+      // An entry made offline (it arrives late) is still accepted when the trip has closed since.
+      if (spec.tripFlag && !truthy(trip[spec.tripFlag]) && !meta.late) return err("closed", spec.closedMessage);
+      if (meta.clientId && db.tables[spec.tab].some((r) => r["Client ID"] === meta.clientId)) return { status: "success", duplicate: true };
+      const clean = gs.cleanRecordFields_(data.values, gs.hubReservedNames_(spec));
       if (clean.error) return err("invalid", clean.error);
       let url = "";
       if (spec.photoColumn && data.photo && data.photo.data) {
@@ -156,7 +162,7 @@ function hub(data) {
         photos.push(buf);
         url = "http://localhost:" + PORT + "/dev/receipt/" + (photos.length - 1) + ".jpg";
       }
-      const server = gs.hubServerFields_(spec, trip, url, a.info.email);
+      const server = gs.hubServerFields_(spec, trip, url, a.info.email, meta);
       db.tables[spec.tab].push(Object.assign({}, server.before, clean.fields, server.after));
       return { status: "success" };
     }
@@ -166,7 +172,7 @@ function hub(data) {
 
 
 function listTripTemplates(data) {
-  const a = auth(data, "addTrips"); if (a.error) return a.error;
+  const a = auth(data, "manageTrips"); if (a.error) return a.error;
   return { status: "success", trips: tripTemplates() };
 }
 
@@ -177,14 +183,15 @@ function tripTemplates() {
 function addTrip(data) {
   const info = verify(data.idToken);
   if (!info) return SIGNIN_ERR;
-  if (!info.emailVerified || !permissionsFor(info.email).addTrips) return err("not_allowed", "Your account (" + info.email + ") is not allowed to add trips. Ask a leader to tick addTrips for you on the Leaders sheet.");
+  if (!info.emailVerified || !permissionsFor(info.email).manageTrips) return err("not_allowed", "Your account (" + info.email + ") is not allowed to manage trips. Ask a leader to tick manageTrips for you on the Leaders sheet.");
   const rec = gs.buildTripRecord_(data.values);
   if (rec.error) return err("invalid", rec.error);
   const tripId = gs.nextTripId_(rec.month, db.trips.map((t) => t.tripId));
   if (!tripId) return err("invalid", "That month already has 99 trips.");
   db.trips.push(Object.assign({ tripId }, rec.fields, rec.after));
   db.tables["Trip Log"].push([new Date().toISOString(), info.email, rec.fields.tripTitle || "", rec.fields.tripDates || ""]);
-  return { status: "success", tripId };
+  // The refreshed lists come back with the new trip (see addTrip_ in Leaders.gs).
+  return { status: "success", tripId, trips: db.trips.map((t) => tripSummary(t)), templates: tripTemplates() };
 }
 
 // Saved profiles: the real planning (who may update which row, what the columns are) from
@@ -217,24 +224,34 @@ function slipPost(data) {
     if (!info || !info.emailVerified || !info.email) return { status: "error", message: "unauthorized" };
     return saveProfile(data.kind, info.email, data.profileData);
   }
-  if (data.action === "slipTrip") {
-    if (!verify(data.idToken)) return err("signin", "Please sign in to view this trip.");
-    const t = tripConfig(data.tripId);
-    if (!t) return err("not_found", "Trip not found.");
-    return truthy(t.acceptingResponses) ? t : err("closed", "This trip is not accepting permission slips.");
+  if (data.action === "slipLoad") {
+    const info = verify(data.idToken);
+    if (!info || !info.emailVerified || !info.email) return err("signin", "Please sign in to view this trip.");
+    const out = { status: "success", profiles: profilesFor(info.email) };
+    if (data.tripId) {
+      const t = tripConfig(data.tripId);
+      out.trip = !t ? err("not_found", "Trip not found.") : truthy(t.acceptingResponses) ? t : err("closed", "This trip is not accepting permission slips.");
+    }
+    return out;
   }
   if (!verify(data._idToken)) return err("signin", "Your sign-in has expired. Please sign in again; your entries are still on the form.");
   const trip = tripConfig(data._tripId);
   if (!trip) return err("not_found", "Trip not found.");
-  if (!truthy(trip.acceptingResponses)) return err("closed", "This trip is no longer accepting permission slips.");
-  if (!data._tripRevision || data._tripRevision !== trip._tripRevision) {
-    return err("trip_changed", "Trip details have changed. Reload the page, review the updated trip details, and sign again.");
-  }
+  // A slip signed offline can arrive after the trip closed: it is kept (the real script also flags it).
+  const meta = gs.hubMeta_({ clientId: data._clientId, enteredAt: data._enteredAt });
+  if (!truthy(trip.acceptingResponses) && !meta.late) return err("closed", "This trip is no longer accepting permission slips.");
+  if (meta.clientId && db.tables.Responses.some((r) => r["Client ID"] === meta.clientId)) return { status: "success", duplicate: true };
+  // A changed trip revision is accepted (the real script adds a note to the Flags column).
   const server = new Set(["action", "idToken", "googleUserId", "Flags", "PDF Link", "tripId", "formVersion", "wordingHash", "website_url"]);
   const row = { Timestamp: new Date().toISOString() };
-  Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k)) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
+  Object.entries(data).forEach(([k, v]) => { if (!k.startsWith("_") && !server.has(k) && !["client id", "entered at"].includes(k.toLowerCase())) row[k] = Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v).slice(0, 1000); });
   row.tripId = trip.tripId;
+  if (meta.enteredAt) row["Entered At"] = meta.enteredAt.toISOString();
+  if (meta.clientId) row["Client ID"] = meta.clientId;
   db.tables.Responses.push(row);
+  // The profile is saved in the same call (never blocking the slip), like handlePermissionPost_.
+  const info = data._profile && typeof data._profile === "object" && !data.website_url ? verify(data._idToken) : null;
+  if (info && info.emailVerified && info.email) saveProfile(data._profile.kind, info.email, data._profile.data);
   return { status: "success" };
 }
 

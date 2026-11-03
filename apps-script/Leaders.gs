@@ -60,14 +60,14 @@ function verifyGoogleTokenInfo_(idToken) {
   }
 }
 
-// Leaders sheet: row 1 headers `email`, `addTrips`, `recordPayments`, `recordReimbursements`;
+// Leaders sheet: row 1 headers `email`, `manageTrips`, `recordReimbursements`;
 // one leader per row, a permission is on when its cell is TRUE (checkbox) / yes / 1.
 // Legacy sheet with no permission columns (just emails in column A): every listed
 // leader keeps all permissions. Once any permission column exists, a missing column
 // or blank cell means "no".
-var LEADER_PERMISSIONS = ['addTrips', 'recordPayments', 'recordReimbursements'];
+var LEADER_PERMISSIONS = ['manageTrips', 'recordReimbursements'];
 
-// Returns { addTrips, recordPayments, recordReimbursements } (booleans) for a listed
+// Returns { manageTrips, recordReimbursements } (booleans) for a listed
 // email, or null when the email is not on the Leaders sheet.
 function getLeaderPermissions_(email) {
   if (!email) return null;
@@ -138,9 +138,9 @@ function parseDepartureOptions_(html) {
 // the accepting flags are deliberately not copied.
 function listTripTemplates_(data) {
   var info = verifyGoogleTokenInfo_(data.idToken);
-  if (!info) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
-  if (!info.emailVerified || !hasLeaderPermission_(info.email, 'addTrips')) {
-    return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to add trips.' };
+  if (!info) return errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.');
+  if (!info.emailVerified || !hasLeaderPermission_(info.email, 'manageTrips')) {
+    return errorReply_('not_allowed', 'Your account (' + info.email + ') is not allowed to manage trips.');
   }
   return { status: 'success', trips: tripTemplates_() };
 }
@@ -157,7 +157,7 @@ function tripTemplateFromRow_(row) {
   return t;
 }
 
-// No permission check here: callers must have verified addTrips already.
+// No permission check here: callers must have verified manageTrips already.
 function tripTemplates_() {
   var sheet;
   try {
@@ -208,14 +208,14 @@ function buildTripRecord_(input) {
 
 function addTrip_(data) {
   var info = verifyGoogleTokenInfo_(data.idToken);
-  if (!info) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
-  if (!info.emailVerified || !hasLeaderPermission_(info.email, 'addTrips')) {
-    return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to add trips. Ask a leader to tick addTrips for you on the Leaders sheet.' };
+  if (!info) return errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.');
+  if (!info.emailVerified || !hasLeaderPermission_(info.email, 'manageTrips')) {
+    return errorReply_('not_allowed', 'Your account (' + info.email + ') is not allowed to manage trips. Ask a leader to tick manageTrips for you on the Leaders sheet.');
   }
 
   // The form's values arrive as data.values (input name -> value).
   var rec = buildTripRecord_(data.values);
-  if (rec.error) return { status: 'error', code: 'invalid', message: rec.error };
+  if (rec.error) return errorReply_('invalid', rec.error);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -228,10 +228,10 @@ function addTrip_(data) {
     var existingIds = (idCol === -1 || sheet.getLastRow() < 2) ? [] :
       sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim(); });
     var tripId = nextTripId_(rec.month, existingIds);
-    if (!tripId) return { status: 'error', code: 'invalid', message: 'That month already has 99 trips.' };
+    if (!tripId) return errorReply_('invalid', 'That month already has 99 trips.');
 
     var result = appendRecord_(sheet, rec.fields, { tripId: tripId }, rec.after, { textCells: true });
-    if (result.error) return { status: 'error', code: 'invalid', message: result.error };
+    if (result.error) return errorReply_('invalid', result.error);
 
     // Who added it goes in a private log tab, never in Trips (the slip page shows Trips).
     var log = getOrCreateSheet_(ss, 'Trip Log', true);
@@ -240,5 +240,14 @@ function addTrip_(data) {
   } finally {
     lock.releaseLock();
   }
-  return { status: 'success', tripId: tripId };
+  // The page's refreshed trip list and templates come back too (see hubSessionFor_), so adding a
+  // trip doesn't cost a second call. The trip is saved by now, so this must never turn into an error.
+  var result = { status: 'success', tripId: tripId };
+  try {
+    result.trips = hubListTrips_();
+    result.templates = tripTemplates_();
+  } catch (e) {
+    console.error('Could not refresh trip lists after adding: ' + e);
+  }
+  return result;
 }

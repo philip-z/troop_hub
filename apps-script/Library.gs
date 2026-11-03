@@ -59,7 +59,7 @@ function readTable_(ss, tab) {
 function listLibrary_(role, tab, label) {
   var ss = findSpreadsheet_(role);
   if (!ss) {
-    return hubError_('config', 'The ' + label + ' spreadsheet has not been set up yet. Ask an admin to set ' + SHEET_ROLES[role] + '.');
+    return errorReply_('config', 'The ' + label + ' spreadsheet has not been set up yet. Ask an admin to set ' + SHEET_ROLES[role] + '.');
   }
   return { status: 'success', items: readTable_(ss, tab) };
 }

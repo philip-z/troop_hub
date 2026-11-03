@@ -1,65 +1,138 @@
 (function () {
   const C = window.TROOP_CONFIG, L = window.TroopLib;
   const $ = (id) => document.getElementById(id);
-  const NO_PERMS = { addTrips: false, recordPayments: false, recordReimbursements: false };
+  const NO_PERMS = { manageTrips: false, recordReimbursements: false };
   let idToken = null, email = "", perms = NO_PERMS, trips = [], meals = [];
 
   function msg(t, err) { const m = $("msg"); m.textContent = t || ""; m.style.color = err ? "#b00020" : "#1b5e20"; }
 
-  // The Apps Script web app verifies the Google ID token and enforces who may do what.
-  // Sent as text/plain so the browser skips the CORS preflight Apps Script can't answer.
-  async function api(action, payload) {
-    const res = await fetch(C.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    const d = await res.json();
+  // The Apps Script web app verifies the Google ID token and enforces who may do what. The transport
+  // (offline.js) flags a missing reply as err.network or err.retry; a reply that says "error" becomes an
+  // error carrying the server's err.code, e.g. "signin" or "not_allowed".
+  async function api(action, payload, timeoutMs) {
+    const d = await O.send(C.APPS_SCRIPT_URL, Object.assign({}, payload, { action, idToken }), timeoutMs);
     if (d.status === "error" || d.error) {
       if (d.code === "signin") TroopAuth.signOut();
-      throw new Error(d.message || d.error);
+      throw Object.assign(new Error(d.message || d.error), { code: d.code });
     }
     return d;
   }
-  const submitRecord = (kind, tripId, values, photo) => api("hubSubmit", { kind, tripId, values, photo });
+
+  // ---- Offline: saved session + outbox (see offline.js) ----
+  const O = window.TroopOffline;
+  const SESSION_FRESH_MS = 10 * 60 * 1000; // a saved session newer than this is used without asking the server
+  const KIND_LABEL = { receipt: "Receipt", payment: "Payment", reimbursement: "Reimbursement" };
+
+  function applySession(res) {
+    perms = Object.assign({}, NO_PERMS, res.permissions);
+    if (res.trips) trips = res.trips;
+  }
+  function showStale(on) { $("stale-note").hidden = !on; }
 
   async function onSignIn(token, claims) {
     idToken = token;
+    email = String(claims.email || "").toLowerCase();
     try {
-      email = claims.email || "";
-      let res;
-      const cachedSession = sessionStorage.getItem('troop58_session');
-      const cachedToken = sessionStorage.getItem('troop58_session_token');
-      if (cachedSession && cachedToken === token) {
-        res = JSON.parse(cachedSession);
+      const saved = O.cacheGet(email, "session");
+      if (saved) {
+        // Show what this device last saw straight away; refresh in the background if it is getting old.
+        applySession(saved.data);
+        await showApp();
+        if (Date.now() - saved.at > SESSION_FRESH_MS) refreshSession();
       } else {
-        res = await api("hubSession");
-        sessionStorage.setItem('troop58_session', JSON.stringify(res));
-        sessionStorage.setItem('troop58_session_token', token);
+        const res = await api("hubSession");
+        O.cacheSet(email, "session", res);
+        applySession(res);
+        await showApp();
       }
-      perms = Object.assign({}, NO_PERMS, res.permissions);
-      if (res.trips) {
-        trips = res.trips;
-        sessionStorage.setItem('troop58_trips', JSON.stringify(trips));
-      }
-      await showApp();
-    } catch (e) { msg(e.message, true); }
+    } catch (e) {
+      msg(e.network ? "You're offline and nothing is saved on this device yet. Connect once to load your trips." : e.message, true);
+    }
+    flushOutbox();
   }
+  async function refreshSession() {
+    const who = email;
+    try {
+      const res = await api("hubSession");
+      if (who !== email) return;
+      O.cacheSet(email, "session", res);
+      applySession(res);
+      showStale(false);
+      await showApp();
+    } catch (e) {
+      if (e.network || e.retry) showStale(true);
+      else if (e.code !== "signin") msg(e.message, true);
+    }
+  }
+  // Only the screen is reset here. This also runs when a session merely expires, and then the saved
+  // data and the outbox must stay; deleting them is the sign-out button's job (TroopAuth.userSignOut).
   function onSignOut() {
-    sessionStorage.removeItem('troop58_session');
-    sessionStorage.removeItem('troop58_session_token');
-    sessionStorage.removeItem('troop58_trips');
-    idToken = null; email = ""; perms = NO_PERMS;
-    loaded.equipment = loaded.meals = false; equipment = []; recipes = [];
-    $("equipment").textContent = ""; $("equipment-status").textContent = "";
+    idToken = null; email = ""; perms = NO_PERMS; trips = [];
+    listsReady = listsLoading = false; equipment = []; recipes = []; equipmentError = "";
+    $("equipment").textContent = ""; $("equipment-status").textContent = ""; renderRecipePicker();
+    showStale(false); $("outbox").hidden = true;
     $("app").hidden = true; $("signout").hidden = true; $("signin").hidden = false; $("user").textContent = "";
   }
+
+  // Every receipt, payment and reimbursement is written to the outbox first and then sent, so it
+  // survives losing signal or closing the page. The clientId makes a repeat harmless: the server
+  // ignores an ID it already has. Resolves { queued: true } when it could not be sent yet.
+  async function submitRecord(kind, tripId, values, photo) {
+    const payload = { kind, tripId, values, photo, clientId: O.uuid(), enteredAt: new Date().toISOString() };
+    const r = await O.submitNow({ id: payload.clientId, email, kind: "hubSubmit", payload, createdAt: payload.enteredAt }, sendItem);
+    renderOutbox();
+    if (r.sent) return {};
+    if (r.queued) return { queued: true, signin: r.signin };
+    throw new Error(r.message || "It could not be sent. Check your connection and try again.");
+  }
+  // Sends one queued item of any kind (receipts and so on from here, permission slips from the slip page).
+  const sendItem = O.makeSender({ url: C.APPS_SCRIPT_URL, getToken: () => idToken, onSignin: () => TroopAuth.signOut() });
+  async function flushOutbox() {
+    if (!email || !idToken || navigator.onLine === false) { renderOutbox(); return; }
+    let r;
+    try { r = await O.flush(email, sendItem, renderOutbox); } catch (e) { return; }
+    if (r.sent) msg("Sent " + r.sent + " saved item" + (r.sent === 1 ? "" : "s") + ".");
+  }
+  function describeItem(item) {
+    if (item.label) return item.label; // e.g. a permission slip, labeled where it was signed
+    const p = item.payload || {};
+    const trip = trips.find((t) => t.tripId === p.tripId);
+    const vals = Object.values(p.values || {}).map(String).filter(Boolean).slice(0, 2).join(", ");
+    return (KIND_LABEL[p.kind] || p.kind) + (trip ? " for " + trip.tripTitle : "") + (vals ? " (" + vals + ")" : "");
+  }
+  async function renderOutbox() {
+    let items = [];
+    try { items = email ? await O.outbox.list(email) : []; } catch (e) { /* no offline storage */ }
+    $("outbox").hidden = !items.length;
+    if (!items.length) return;
+    const pending = items.filter((i) => i.status === "pending").length;
+    $("outbox-summary").textContent = pending
+      ? pending + " saved item" + (pending === 1 ? " is" : "s are") + " waiting to be sent" + (navigator.onLine === false ? " (you're offline)." : ".")
+      : "";
+    $("outbox-send").hidden = !pending;
+    const ul = $("outbox-list"); ul.textContent = "";
+    items.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = (item.status === "failed" ? "Not accepted: " : "Waiting: ") + describeItem(item) + (item.status === "failed" ? " \u2014 " + item.error : "");
+      const button = (label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = fn; li.append(" ", b); };
+      if (item.status === "failed") button("Try again", async () => { await O.outbox.retry(item.id); flushOutbox(); });
+      button("Remove", async () => {
+        if (item.status === "pending" && !confirm("Delete this saved item without sending it?")) return;
+        await O.outbox.remove(item.id); renderOutbox();
+      });
+      ul.appendChild(li);
+    });
+  }
+  $("outbox-send").onclick = flushOutbox;
+  window.addEventListener("online", flushOutbox);
+  window.addEventListener("offline", renderOutbox);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") flushOutbox(); });
+
   async function showApp() {
     $("signin").hidden = true; $("signout").hidden = false; $("app").hidden = false;
     $("user").textContent = email;
-    $("add-trip").hidden = !perms.addTrips;
-    if (perms.addTrips) {
+    $("add-trip").hidden = !perms.manageTrips;
+    if (perms.manageTrips) {
       const addTripP = $("add-trip");
       if (!addTripP.querySelector("button")) {
         addTripP.textContent = "";
@@ -78,6 +151,7 @@
       eqBtn.onclick = () => { window.open(C.EQUIPMENT_FORM_URL, "_blank"); };
       p.append(eqBtn);
     }
+    prepareLists();
     selectTab(location.hash.slice(1), false);
     if (!trips.length) {
       await loadTrips();
@@ -109,18 +183,44 @@
   });
   window.addEventListener("hashchange", () => { if (!$("app").hidden) selectTab(location.hash.slice(1), false); });
 
-  // Equipment and recipes live in their own spreadsheets; each is fetched the first time its tab opens.
-  const loaded = { equipment: false, meals: false };
-  let equipment = [], recipes = [];
-  function ensureLoaded(name) {
-    if (name === "equipment" && !loaded.equipment) loadEquipment();
-    if (name === "meals" && !loaded.meals) loadRecipes();
+  // Equipment and recipes live in their own spreadsheets. One background call (hubLists) fetches both
+  // once the hub is open, and the answer is saved on the device, so the tabs open straight away and
+  // work offline. A tab opened before the answer arrives shows "Loading..." and fills in when it does.
+  const LISTS_FRESH_MS = 10 * 60 * 1000;
+  let equipment = [], recipes = [], equipmentError = "", listsReady = false, listsLoading = false;
+
+  function applyLists(data) {
+    const items = (list) => (list && list.status === "success" ? list.items : null);
+    equipment = items(data.equipment) || [];
+    equipmentError = items(data.equipment) ? "" : "Could not load equipment: " + ((data.equipment && data.equipment.message) || "try again later.");
+    recipes = items(data.recipes) || [];
+    listsReady = true;
+    renderEquipment();
+    renderRecipePicker();
   }
-  async function loadEquipment() {
-    loaded.equipment = true;
-    $("equipment-status").textContent = "Loading...";
-    try { equipment = (await api("hubListEquipment")).items; renderEquipment(); }
-    catch (e) { loaded.equipment = false; $("equipment-status").textContent = "Could not load equipment: " + e.message; }
+  async function loadLists() {
+    if (listsLoading) return;
+    listsLoading = true;
+    const who = email;
+    try {
+      const res = await api("hubLists");
+      if (who !== email) return;
+      O.cacheSet(email, "lists", res);
+      applyLists(res);
+    } catch (e) {
+      if (!listsReady) { equipmentError = "Could not load equipment: " + e.message; renderEquipment(); }
+    } finally { listsLoading = false; }
+  }
+  // Called whenever the hub is shown: use the saved copy at once, and refresh it in the background if it is old.
+  function prepareLists() {
+    const saved = O.cacheGet(email, "lists");
+    if (saved) applyLists(saved.data);
+    if (!saved || Date.now() - saved.at > LISTS_FRESH_MS) loadLists();
+  }
+  function ensureLoaded(name) {
+    if (listsReady || (name !== "equipment" && name !== "meals")) return;
+    if (name === "equipment") $("equipment-status").textContent = "Loading...";
+    if (!listsLoading) loadLists();
   }
   // Which sheet columns make up an item comes from data-* on #equipment in index.html.
   function renderEquipment() {
@@ -129,7 +229,7 @@
     const shownCols = [cols.title, cols.count, ...details].filter(Boolean);
     const q = $("equipment-filter").value.trim().toLowerCase();
     const shown = equipment.filter((i) => !q || shownCols.map((c) => i[c] || "").join(" ").toLowerCase().includes(q));
-    $("equipment-status").textContent = shown.length ? "" : (equipment.length ? "No equipment matches." : "No equipment listed yet.");
+    $("equipment-status").textContent = equipmentError || (shown.length ? "" : (equipment.length ? "No equipment matches." : "No equipment listed yet."));
     const ul = $("equipment"); ul.textContent = "";
     shown.forEach((i) => {
       const li = document.createElement("li");
@@ -141,14 +241,10 @@
   }
   $("equipment-filter").oninput = renderEquipment;
 
-  async function loadRecipes() {
-    loaded.meals = true;
-    try {
-      recipes = (await api("hubListRecipes")).items;
-      const sel = $("recipe-pick"); sel.length = 1;
-      recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r[sel.dataset.label] || ""; sel.appendChild(o); });
-      $("recipe-pick-row").hidden = !recipes.length;
-    } catch (e) { loaded.meals = false; $("recipe-pick-row").hidden = true; }
+  function renderRecipePicker() {
+    const sel = $("recipe-pick"); sel.length = 1;
+    recipes.forEach((r, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = r[sel.dataset.label] || ""; sel.appendChild(o); });
+    $("recipe-pick-row").hidden = !recipes.length;
   }
   $("recipe-pick").onchange = (ev) => {
     const r = recipes[Number(ev.target.value)];
@@ -188,9 +284,9 @@
       if (t.acceptingResponses) {
         navButton("Permission slip", "slip.html?trip=" + encodeURIComponent(t.tripId));
       }
-      navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.tripId));
+      if (perms.manageTrips) navButton("Float plan", "float-plan.html?trip=" + encodeURIComponent(t.tripId));
       if (t.acceptingReceipts) button("Submit receipt", () => openReceipt(t));
-      if (perms.recordPayments) button("Record payment", () => openPayment(t));
+      if (perms.manageTrips) button("Record payment", () => openPayment(t));
       if (perms.recordReimbursements) button("Record reimbursement", () => openReimbursement(t));
       ul.appendChild(li);
     });
@@ -227,7 +323,13 @@
       ev.preventDefault();
       const submit = f.querySelector("button[value=ok]");
       submit.disabled = true;
-      try { await onSubmit(Object.fromEntries(new FormData(f))); d.close(); msg("Submitted. Thank you!"); }
+      try {
+        const r = await onSubmit(Object.fromEntries(new FormData(f)));
+        d.close();
+        msg(r && r.queued
+          ? (r.signin ? "Saved on this device. Sign in again and it will be sent." : "Saved on this device. It will be sent when you have a connection.")
+          : "Submitted. Thank you!");
+      }
       catch (e) { msg(e.message, true); }
       finally { submit.disabled = false; }
     };
@@ -245,7 +347,7 @@
       async (v) => {
         const { photo, ...values } = v;
         const data = await photoToBase64(photo);
-        await submitRecord("receipt", t.tripId, values, data ? { data } : null);
+        return submitRecord("receipt", t.tripId, values, data ? { data } : null);
       });
   }
 
@@ -276,5 +378,5 @@
   $("clear-meals").onclick = () => { meals = []; renderMeals(); };
 
   TroopAuth.start({ buttonId: "signin", onSignIn, onSignOut });
-  $("signout").onclick = TroopAuth.signOut;
+  $("signout").onclick = TroopAuth.userSignOut;
 })();

@@ -41,8 +41,8 @@ var FORM_VERSION = '2026-10-26';
 function permissionTripConfig_(tripId) {
   var ss = getSpreadsheet_('trips');
   var trip = getTripConfig_(ss, tripId);
-  if (!trip) return { status: 'error', code: 'not_found', message: 'Trip not found.' };
-  if (!isTruthy_(trip.acceptingResponses)) return { status: 'error', code: 'closed', message: 'This trip is not accepting permission slips.' };
+  if (!trip) return errorReply_('not_found', 'Trip not found.');
+  if (!isTruthy_(trip.acceptingResponses)) return errorReply_('closed', 'This trip is not accepting permission slips.');
   return trip;
 }
 
@@ -59,30 +59,40 @@ function handlePermissionPost_(raw, data) {
 
   if (data.action === 'saveProfile') {
     var writer = profileUser_(data.idToken);
-    if (!writer) { logEvent_('saveProfile unauthorized', 'no verified email'); return jsonOut_({ status: 'error', message: 'unauthorized' }); }
+    if (!writer) { logEvent_('saveProfile unauthorized', 'no verified email'); return jsonOut_(errorReply_('', 'unauthorized')); }
     var saved = saveProfile_(data.kind, writer.email, data.profileData);
     logEvent_('saveProfile ' + (saved.status === 'success' ? 'ok' : 'rejected'), data.kind + ' fields=' + Object.keys(data.profileData || {}).length + (saved.message ? ' ' + saved.message : ''));
     return jsonOut_(saved);
   }
 
-  if (data.action === 'slipTrip') {
-    if (!verifyGoogleToken_(data.idToken)) return jsonOut_({ status: 'error', code: 'signin', message: 'Please sign in to view this trip.' });
-    return jsonOut_(permissionTripConfig_(data.tripId));
+  // The slip page's start-up in one call: the trip (when it isn't already saved from the hub)
+  // and this person's saved profiles. The trip part is permissionTripConfig_'s answer.
+  if (data.action === 'slipLoad') {
+    var loader = profileUser_(data.idToken);
+    if (!loader) return jsonOut_(errorReply_('signin', 'Please sign in to view this trip.'));
+    var loaded = { status: 'success', profiles: getUserProfiles_(loader.email) };
+    if (data.tripId) loaded.trip = permissionTripConfig_(data.tripId);
+    return jsonOut_(loaded);
   }
 
   // SUBMISSION (sign-in required, same as viewing the trip).
   if (!verifyGoogleToken_(data._idToken)) {
-    return jsonOut_({ status: 'error', code: 'signin', message: 'Your sign-in has expired. Please sign in again; your entries are still on the form.' });
+    return jsonOut_(errorReply_('signin', 'Your sign-in has expired. Please sign in again; your entries are still on the form.'));
   }
   // Soft anti-spam: trim and flag, never reject.
   var flags = [];
   var submittedTripRevision = data._tripRevision;
+  var submittedIdToken = data._idToken;
   if (raw.length > MAX_PAYLOAD_CHARS) flags.push('Oversized payload');
   var honeypotFilled = !!(data[HONEYPOT_FIELD] && String(data[HONEYPOT_FIELD]).trim() !== '');
   if (honeypotFilled) flags.push('Honeypot filled');
 
   var slipSnapshot = data._slipSnapshot; // read before sanitizeFields_ drops '_' keys
+  var profileSubmit = data._profile;     // { kind, data }: the inputs marked data-profile, see below
   var submittedTripId = data._tripId;
+  // The device's unique ID for this slip and when it was signed there (see hubMeta_ in Hub.gs): a slip
+  // signed offline can arrive much later, and a retry must not be written twice.
+  var slipMeta = hubMeta_({ clientId: data._clientId, enteredAt: data._enteredAt });
   data = sanitizeFields_(data, flags);
 
   var slipKind = SLIP_KINDS[String(data[SLIP_FORM_TYPE_COLUMN]).toLowerCase()] || SLIP_KINDS.youth;
@@ -91,17 +101,19 @@ function handlePermissionPost_(raw, data) {
 
   var ss = getSpreadsheet_('trips');
   var trip = getTripConfig_(ss, submittedTripId);
-  if (!trip) return jsonOut_({ status: 'error', code: 'not_found', message: 'Trip not found.' });
+  if (!trip) return jsonOut_(errorReply_('not_found', 'Trip not found.'));
   if (!isTruthy_(trip.acceptingResponses)) {
-    return jsonOut_({ status: 'error', code: 'closed', message: 'This trip is no longer accepting permission slips.' });
+    // A slip signed while offline can reach the server after the trip stopped taking slips. It was
+    // signed in time, so it is kept and flagged rather than lost.
+    if (!slipMeta.late) return jsonOut_(errorReply_('closed', 'This trip is no longer accepting permission slips.'));
+    flags.push('Trip closed before the slip was sent');
+    logEvent_('late slip accepted', 'trip ' + trip.tripId + ' closed, signed ' + slipMeta.enteredAt.toISOString());
   }
-  if (!submittedTripRevision || submittedTripRevision !== trip._tripRevision) {
-    return jsonOut_({
-      status: 'error',
-      code: 'trip_changed',
-      message: 'Trip details have changed. Reload the page, review the updated trip details, and sign again.'
-    });
-  }
+  // A slip is accepted even if the trip was edited while the person was filling it out (or
+  // while they were offline): what they actually saw and signed is recorded in wordingHash, and
+  // the Flags column says the trip changed, so a leader can follow up if it matters.
+  if (!submittedTripRevision) flags.push('No trip revision');
+  else if (submittedTripRevision !== trip._tripRevision) flags.push('Trip changed after the form loaded');
 
   // Always overwrite server-controlled columns so a client can't spoof them.
   data['tripId'] = displayValue_(trip.tripId); // always from the Trips sheet, never the browser
@@ -109,26 +121,50 @@ function handlePermissionPost_(raw, data) {
   data['wordingHash'] = wordingHash_(slipSnapshot);
   if (!data['wordingHash']) flags.push('No wording hash');
   data['Flags'] = flags.join('; ');
+  if (slipMeta.enteredAt) data[SERVER_COLUMNS.enteredAt] = slipMeta.enteredAt;
+  if (slipMeta.clientId) data[SERVER_COLUMNS.clientId] = slipMeta.clientId;
 
-  var sheet = getOrCreateSheet_(ss, 'Responses', true);
+  // The lock only makes the repeat check and the append one step, so it is tried briefly: a burst of
+  // parents must never be turned away, and without it the worst case is the old behavior.
+  var lock = LockService.getScriptLock();
+  var haveLock = lock.tryLock(10000);
+  try {
+    var sheet = getOrCreateSheet_(ss, 'Responses', true);
+    if (slipMeta.clientId && columnHasValue_(sheet, SERVER_COLUMNS.clientId, slipMeta.clientId)) {
+      return jsonOut_({ status: 'success', duplicate: true }); // a retry of a slip that was already written
+    }
 
-  // Ensure "Timestamp" and all incoming field keys exist in row 1
-  var incomingKeys = Object.keys(data);
-  var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
+    // Ensure "Timestamp" and all incoming field keys exist in row 1
+    var incomingKeys = Object.keys(data);
+    var headers = ensureSheetHeaders_(sheet, ['Timestamp'].concat(incomingKeys));
 
-  var headerMap = {};
-  headers.forEach(function(h, idx) { headerMap[h.toLowerCase()] = idx; });
+    var rowData = headers.map(function(header) {
+      if (header.toLowerCase() === 'timestamp') return new Date();
+      var val = data[header];
+      return (val !== undefined && val !== null) ? val : '';
+    });
 
-  var rowData = headers.map(function(header) {
-    if (header.toLowerCase() === 'timestamp') return new Date();
-    var val = data[header];
-    return (val !== undefined && val !== null) ? val : '';
-  });
+    sheet.appendRow(rowData);
+  } finally {
+    if (haveLock) lock.releaseLock();
+  }
 
-  sheet.appendRow(rowData);
+  // The signed-in person's profile is saved in this same call, so a submit is one round trip.
+  // It is not derived from the response: slip.js sends exactly the inputs marked data-profile in
+  // _profile, so a one-off question never lands in a profile. It never blocks the submission.
+  if (profileSubmit && typeof profileSubmit === 'object' && !honeypotFilled) {
+    try {
+      var profileWriter = profileUser_(submittedIdToken);
+      if (profileWriter) {
+        var profileResult = saveProfile_(profileSubmit.kind, profileWriter.email, profileSubmit.data);
+        logEvent_('profile ' + (profileResult.status === 'success' ? 'saved' : 'rejected'), profileSubmit.kind + (profileResult.message ? ' ' + profileResult.message : ''));
+      }
+    } catch (profErr) {
+      console.error('Profile save failed: ' + profErr);
+      logEvent_('profile save FAILED', profErr + '');
+    }
+  }
 
-  // Saved profiles are not derived from the submission: slip.js sends the inputs marked
-  // data-profile in a separate saveProfile call, so a one-off question never lands in one.
   return jsonOut_({ status: "success" });
 }
 
@@ -138,11 +174,14 @@ function sanitizeFields_(input, flags) {
   var blocked = { 'action': true, 'idToken': true, 'googleUserId': true,
                   'Flags': true, 'PDF Link': true, 'tripId': true, 'formVersion': true, 'wordingHash': true };
   blocked[HONEYPOT_FIELD] = true;
+  // The columns the server fills from the device's metadata (any capitalization).
+  var reservedLower = {};
+  [SERVER_COLUMNS.enteredAt, SERVER_COLUMNS.clientId].forEach(function(n) { reservedLower[n.toLowerCase()] = true; });
 
   var clean = {};
   var count = 0;
   Object.keys(input || {}).forEach(function(key) {
-    if (key.charAt(0) === '_' || blocked[key] || key.length > MAX_KEY_LENGTH) return;
+    if (key.charAt(0) === '_' || blocked[key] || reservedLower[key.toLowerCase()] || key.length > MAX_KEY_LENGTH) return;
     if (count >= MAX_FIELDS) {
       if (flags.indexOf('Too many fields') === -1) flags.push('Too many fields');
       return;
@@ -311,16 +350,16 @@ function getUserProfiles_(email) {
 // Saves (creates or updates) the writer's profile of this kind. Returns the response object.
 function saveProfile_(kind, writerEmail, profileData) {
   var spec = Object.prototype.hasOwnProperty.call(SLIP_KINDS, String(kind)) ? SLIP_KINDS[String(kind)] : null;
-  if (!spec) return { status: 'error', code: 'invalid', message: 'Unknown profile type.' };
+  if (!spec) return errorReply_('invalid', 'Unknown profile type.');
   var clean = cleanRecordFields_(profileData, [], { textCells: true });
-  if (clean.error) return { status: 'error', code: 'invalid', message: clean.error };
+  if (clean.error) return errorReply_('invalid', clean.error);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.profileTab, true);
     var plan = planProfileSave_(sheetGrid_(sheet), spec, writerEmail, clean.fields);
-    if (plan.error) return { status: 'error', code: 'invalid', message: plan.error };
+    if (plan.error) return errorReply_('invalid', plan.error);
 
     var before = getSheetHeaders_(sheet);
     ensureSheetHeaders_(sheet, plan.required);
@@ -333,4 +372,50 @@ function saveProfile_(kind, writerEmail, profileData) {
     lock.releaseLock();
   }
   return { status: 'success' };
+}
+
+// ---------------------------------------------------------------------------
+// FLOAT PLAN (float-plan.html): everyone who submitted a slip for one trip. Leaders with
+// the manageTrips permission only, because rows include emergency phones and medical
+// notes (hubFloatPlan in Hub.gs checks that). Columns are whatever the slip form submitted.
+// ---------------------------------------------------------------------------
+
+// Pure. The Responses rows for `tripId` as objects keyed by header (see tableRows_). Signature
+// columns are left out (the float plan doesn't need them), and when someone submitted more
+// than once for the trip, only their latest slip is kept, so headcounts aren't inflated.
+function tripResponsesFrom_(grid, tripId) {
+  if (!grid || grid.length < 2) return [];
+  var headers = grid[0].map(function(h) { return String(h).trim(); });
+  var idIdx = lowerIndexOf_(headers, 'tripId');
+  if (idIdx === -1) return [];
+  var keep = [];
+  headers.forEach(function(h, i) { if (h.toLowerCase().indexOf('signature') === -1) keep.push(i); });
+  var want = String(tripId === undefined || tripId === null ? '' : tripId).trim();
+  var rows = [keep.map(function(i) { return headers[i]; })];
+  grid.slice(1).forEach(function(r) {
+    if (String(r[idIdx]).trim() === want) rows.push(keep.map(function(i) { return r[i]; }));
+  });
+  var items = tableRows_(rows, 200);
+
+  var seen = {}, latest = [];
+  for (var i = items.length - 1; i >= 0; i--) {
+    var type = String(items[i][SLIP_FORM_TYPE_COLUMN] || '').toLowerCase();
+    var spec = SLIP_KINDS[type] || SLIP_KINDS.youth;
+    var name = normalizeName_(items[i][spec.nameColumn]);
+    var key = name ? (SLIP_KINDS[type] ? type : 'youth') + '|' + name : '#' + i;
+    if (seen[key]) continue;
+    seen[key] = true;
+    latest.push(items[i]);
+  }
+  return latest.reverse();
+}
+
+function tripResponses_(tripId) {
+  var sheet;
+  try {
+    sheet = getOrCreateSheet_(getSpreadsheet_('trips'), 'Responses', false);
+  } catch (e) {
+    return [];
+  }
+  return tripResponsesFrom_(sheetGrid_(sheet), tripId);
 }

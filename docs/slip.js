@@ -95,110 +95,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   const signOutBtn = document.getElementById('signOutBtn');
-  if (signOutBtn) signOutBtn.addEventListener('click', TroopAuth.signOut);
-
-  const manageProfilesBtn = document.getElementById('manageProfilesBtn');
-  const profilesDialog = document.getElementById('profilesDialog');
-  const closeProfilesModal = document.getElementById('closeProfilesModal');
-  const profilesModalForm = document.getElementById('profilesModalForm');
-  const modalScoutSelect = document.getElementById('modalScoutSelect');
-
-  const modalProfileSelect = document.getElementById('modalProfileSelect');
-  const youthExtraFields = document.getElementById('youthExtraFields');
-  const adultExtraFields = document.getElementById('adultExtraFields');
-
-  if (manageProfilesBtn && profilesDialog) {
-    manageProfilesBtn.addEventListener('click', () => {
-      populateModalProfileDropdown();
-      profilesDialog.showModal();
-    });
-  }
-  if (closeProfilesModal && profilesDialog) {
-    closeProfilesModal.addEventListener('click', () => profilesDialog.close());
-  }
-
-  if (modalProfileSelect) {
-    modalProfileSelect.addEventListener('change', (e) => {
-      const val = e.target.value;
-      const isAdultKind = val === 'add_adult' || (val !== '' && val !== 'add_scout' && window.userProfilesMap && window.userProfilesMap[val] && window.userProfilesMap[val].kind === 'adult');
-      
-      if (youthExtraFields) youthExtraFields.hidden = isAdultKind;
-      if (adultExtraFields) adultExtraFields.hidden = !isAdultKind;
-      document.getElementById('modalProfileKind').value = isAdultKind ? 'adult' : 'youth';
-
-      if (val === '' || val === 'add_scout' || val === 'add_adult') {
-        document.getElementById('modalScoutName').value = '';
-        document.getElementById('modalGender').value = '';
-        document.getElementById('modalBirthMonth').value = '';
-        document.getElementById('modalHomePatrol').value = '';
-        document.getElementById('modalAuthorizedEmails').value = '';
-        document.getElementById('modalEmergencyPhone').value = '';
-        document.getElementById('modalMedicalNotes').value = '';
-        if (adultExtraFields) {
-          document.getElementById('modalVehicleMake').value = '';
-          document.getElementById('modalAvailableSeats').value = '';
-          document.getElementById('modalYptDate').value = '';
-        }
-      } else if (window.userProfilesMap && window.userProfilesMap[val]) {
-        const p = window.userProfilesMap[val];
-        document.getElementById('modalScoutName').value = p['Name'] || p['Youth Name'] || p['Adult Name'] || '';
-        document.getElementById('modalGender').value = p['Gender'] || '';
-        document.getElementById('modalBirthMonth').value = p['Birth Month'] || '';
-        document.getElementById('modalHomePatrol').value = p['Home Patrol'] || '';
-        document.getElementById('modalAuthorizedEmails').value = p['Authorized Emails'] || '';
-        document.getElementById('modalEmergencyPhone').value = p['Emergency Phone'] || p['Youth Emergency Phone'] || p['Adult Emergency Phone'] || '';
-        document.getElementById('modalMedicalNotes').value = p['Medical Notes'] || '';
-        if (adultExtraFields && isAdultKind) {
-          document.getElementById('modalVehicleMake').value = p['Vehicle Make'] || '';
-          document.getElementById('modalAvailableSeats').value = p['Available Seats'] || '';
-          document.getElementById('modalYptDate').value = p['Ypt Date'] || '';
-        }
-      }
-    });
-  }
-
-  if (profilesModalForm) {
-    profilesModalForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const kind = document.getElementById('modalProfileKind').value;
-      const name = document.getElementById('modalScoutName').value.trim();
-      if (!name) return;
-
-      const profileData = {
-        'Profile Kind': kind,
-        'Name': name,
-        'Gender': document.getElementById('modalGender').value.trim(),
-        'Authorized Emails': document.getElementById('modalAuthorizedEmails').value.trim(),
-        'Emergency Phone': document.getElementById('modalEmergencyPhone').value.trim(),
-        'Medical Notes': document.getElementById('modalMedicalNotes').value.trim()
-      };
-      if (kind === 'youth') {
-        profileData['Youth Name'] = name;
-        profileData['Birth Month'] = document.getElementById('modalBirthMonth').value.trim();
-        profileData['Home Patrol'] = document.getElementById('modalHomePatrol').value.trim();
-        profileData['Youth Emergency Phone'] = profileData['Emergency Phone'];
-      } else {
-        profileData['Adult Name'] = name;
-        profileData['Vehicle Make'] = document.getElementById('modalVehicleMake').value.trim();
-        profileData['Available Seats'] = document.getElementById('modalAvailableSeats').value.trim();
-        profileData['Ypt Date'] = document.getElementById('modalYptDate').value.trim();
-        profileData['Adult Emergency Phone'] = profileData['Emergency Phone'];
-      }
-
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, profileData })
-      })
-        .then(res => res.json())
-        .then(r => {
-          if (r.status === 'success') {
-            profilesDialog.close();
-            loadUserProfile(window.currentUserGoogleId || 'user');
-          }
-        })
-        .catch(err => console.error('Error saving profile:', err));
-    });
-  }
+  if (signOutBtn) signOutBtn.addEventListener('click', TroopAuth.userSignOut);
 
   toggleFormType();
   updatePrintHeader();
@@ -248,36 +145,41 @@ function applyTripDetails(data) {
   });
 }
 
-// The hub caches each open trip's slip config (the same data slipTrip returns) in
-// sessionStorage, so arriving from the hub needs no server call. Edits made to the sheet
-// afterwards are caught on submit by the _tripRevision check.
+// The hub saves each open trip's slip config (see permissionTripConfig_ in Slip.gs) on this device
+// (offline.js), so arriving from the hub needs no server call and works with no signal. Edits made
+// to the sheet afterwards only add a note to the response's Flags column on submit.
 function cachedTripDetails() {
   try {
-    const trips = JSON.parse(sessionStorage.getItem('troop58_trips') || '[]');
-    const trip = trips.find(t => t && t.tripId === TRIP_ID);
+    const saved = TroopOffline.cacheGet(window.currentEmail, 'session');
+    const trip = ((saved && saved.data.trips) || []).find(t => t && t.tripId === TRIP_ID);
     return trip && trip.slip ? trip.slip : null;
   } catch (e) { return null; }
 }
 
-function loadTripDetails() {
-  if (!TRIP_ID) { showTripUnavailable('No trip selected. Open this form from the trip list.'); return; }
+// Everything the page needs to start, in as few calls as possible. Arriving from the hub, the trip is
+// already saved on this device, so only the saved profiles are fetched. From a direct link, one call
+// (slipLoad) brings back the trip and the profiles together.
+function loadSlipData(googleUserId) {
+  if (!TRIP_ID) {
+    showTripUnavailable('No trip selected. Open this form from the trip list.');
+    loadUserProfile(googleUserId);
+    return;
+  }
 
   const cached = cachedTripDetails();
-  if (cached) { applyTripDetails(cached); return; }
+  if (cached) { applyTripDetails(cached); loadUserProfile(googleUserId); return; }
 
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'slipTrip', tripId: TRIP_ID, idToken: window.currentIdToken })
-  })
-    .then(res => res.json())
+  useSavedProfiles();
+  TroopOffline.send(APPS_SCRIPT_URL, { action: 'slipLoad', tripId: TRIP_ID, idToken: window.currentIdToken })
     .then(data => {
       if (data.code === 'signin') { TroopAuth.signOut(); return; }
       if (data.status === 'error') { showTripUnavailable(data.message || 'This trip is unavailable.'); return; }
-      applyTripDetails(data);
+      if (data.trip && data.trip.status === 'error') showTripUnavailable(data.trip.message || 'This trip is unavailable.');
+      else if (data.trip) applyTripDetails(data.trip);
+      if (data.profiles) applyServerProfiles(data.profiles);
     })
     .catch(err => console.error("Error loading trip data:", err));
 }
-
 
 // ---------------------------------------------------------------------------
 // 5. Form state (youth/adult toggle, drafts)
@@ -429,7 +331,42 @@ function setupVehicleAutocomplete() {
 // 7. Submission
 // ---------------------------------------------------------------------------
 
-function handleFormSubmit(e) {
+// A slip is written to the outbox on this device first, then sent, so it survives losing signal or
+// closing the page. Its _clientId lets the server ignore a repeat of a slip it already has, and
+// _enteredAt records when it was signed here (it may arrive much later). A slip that couldn't be sent
+// yet stays queued and goes out by itself (see flushSlipOutbox); the form is cleared, since the
+// signed slip is safe in the outbox.
+const slipSender = TroopOffline.makeSender({
+  url: APPS_SCRIPT_URL,
+  getToken: () => window.currentIdToken,
+  onSignin: () => TroopAuth.signOut()
+});
+
+function slipLabel(payload) {
+  const kind = activeProfileKind();
+  const key = kind && profileKeyInput(kind);
+  const name = key ? String(payload[key.name] || '').trim() : '';
+  const title = (document.getElementById('tripTitle') || {}).textContent || '';
+  return 'Permission slip' + (name ? ' for ' + name : '') + (title && title !== 'Loading...' ? ' (' + title + ')' : '');
+}
+
+// Resolves { sent } | { queued, signin } | { refused, message } | { failed, message } (not sent and not
+// saved: this browser has no offline storage, so the entries stay on the form like they used to).
+function submitSlip(payload) {
+  return TroopOffline.submitNow({
+    id: payload._clientId, email: window.currentEmail, kind: 'slipSubmit',
+    payload, createdAt: payload._enteredAt, label: slipLabel(payload)
+  }, slipSender);
+}
+
+function finishSlip(form) {
+  localStorage.removeItem(DRAFT_KEY);
+  form.reset();
+  toggleFormType();
+  updatePrintHeader();
+}
+
+async function handleFormSubmit(e) {
   e.preventDefault();
   const form = e.target;
   const formData = new FormData(form);
@@ -446,50 +383,71 @@ function handleFormSubmit(e) {
   payload._tripId = TRIP_ID;
   payload._tripRevision = window.currentTripId || '';
   payload._slipSnapshot = buildSlipSnapshot(form);
-  if (window.currentIdToken) payload._idToken = window.currentIdToken;
+  payload._clientId = TroopOffline.uuid();
+  payload._enteredAt = new Date().toISOString();
+  // The inputs marked data-profile travel with the slip, so the server saves them in the same call.
+  // (The sign-in token is added when sending, never stored in the outbox.)
+  const profile = window.currentIdToken ? collectProfile() : null;
+  if (profile) payload._profile = { kind: profile.kind, data: profile.profileData };
 
   const submitBtn = form.querySelector('button[type="submit"]');
   if (submitBtn) submitBtn.disabled = true;
   setSubmitting(true);
 
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  })
-  .then(res => res.json())
-  .then(response => {
-    setSubmitting(false); // clear before alert(), which blocks the page
-    if (response.status === 'success') {
-      alert("Permission slip submitted successfully! Thank you.");
-      if (window.currentIdToken) saveUserProfile();
-      localStorage.removeItem(DRAFT_KEY);
-      form.reset();
-      toggleFormType();
-      updatePrintHeader();
-    } else if (response.code === 'signin') {
-      saveFormDraft();
-      alert(response.message);
-      TroopAuth.signOut();
-    } else if (response.code === 'trip_changed') {
-      form.querySelectorAll('input[name*="signature" i]').forEach(el => {
-        el.value = '';
-      });
-      saveFormDraft();
-      alert(response.message);
-    } else {
-      alert("Submission error: " + response.message + "\nYour entries are saved on this device. Please wait a minute and press Submit again.");
-    }
-  })
-  .catch(err => {
-    setSubmitting(false);
-    alert("Network error submitting form. Your entries are saved on this device. Please wait a minute and press Submit again.");
+  let result;
+  try {
+    result = await submitSlip(payload);
+  } catch (err) {
     console.error(err);
-  })
-  .finally(() => {
-    setSubmitting(false);
-    if (submitBtn) submitBtn.disabled = false;
-  });
+    result = { failed: true };
+  }
+  setSubmitting(false); // clear before alert(), which blocks the page
+  if (submitBtn) submitBtn.disabled = false;
+
+  if (result.sent) {
+    alert("Permission slip submitted successfully! Thank you.");
+    if (profile) rememberProfileLocally(profile);
+    finishSlip(form);
+  } else if (result.queued) {
+    alert(result.signin
+      ? "Your sign-in has expired, so your signed slip is saved on this device. Sign in again and it will be sent."
+      : "There is no connection right now, so your signed slip is saved on this device. It will be sent automatically when you are back online; keep this browser signed in.");
+    if (profile) rememberProfileLocally(profile);
+    finishSlip(form);
+  } else if (result.refused) {
+    alert("Submission error: " + result.message + "\nYour entries are saved on this device. Please wait a minute and press Submit again.");
+  } else if (result.signin) {
+    saveFormDraft();
+    alert("Your sign-in has expired. Please sign in again; your entries are still on the form.");
+  } else {
+    alert("Network error submitting form. Your entries are saved on this device. Please wait a minute and press Submit again.");
+  }
+  renderSlipOutbox();
 }
+
+// ---- Slips saved on this device: sending them, and the note about them ----
+async function flushSlipOutbox() {
+  if (!window.currentEmail || !window.currentIdToken || navigator.onLine === false) { renderSlipOutbox(); return; }
+  try { await TroopOffline.flush(window.currentEmail, slipSender, renderSlipOutbox); } catch (e) { /* try again later */ }
+}
+
+async function renderSlipOutbox() {
+  const note = document.getElementById('slipOutboxNote');
+  if (!note) return;
+  let items = [];
+  try { items = window.currentEmail ? await TroopOffline.outbox.list(window.currentEmail) : []; } catch (e) { /* no offline storage */ }
+  const pending = items.filter(i => i.status === 'pending').length;
+  const failed = items.filter(i => i.status === 'failed').length;
+  const parts = [];
+  if (pending) parts.push(pending + ' saved item' + (pending === 1 ? ' is' : 's are') + ' waiting to be sent' + (navigator.onLine === false ? ' (you are offline)' : ''));
+  if (failed) parts.push(failed + ' saved item' + (failed === 1 ? ' was' : 's were') + ' not accepted: open the Troop Hub to review ' + (failed === 1 ? 'it' : 'them'));
+  note.textContent = parts.length ? parts.join('. ') + '.' : '';
+  note.hidden = !parts.length;
+}
+
+window.addEventListener('online', flushSlipOutbox);
+window.addEventListener('offline', renderSlipOutbox);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') flushSlipOutbox(); });
 
 function setSubmitting(on) {
   let overlay = document.getElementById('submitOverlay');
@@ -532,7 +490,7 @@ function buildSlipSnapshot(form) {
     const tag = node.tagName;
     if (['SCRIPT', 'STYLE', 'SELECT', 'BUTTON', 'IMG', 'LEGEND'].includes(tag)) return;
     if (node.getAttribute('aria-hidden') === 'true' || node.classList.contains('sr-only')) return;
-    if (node.id === 'scoutSelectorContainer' || node.classList.contains('signin')) return;
+    if (node.classList.contains('signin')) return;
     if (getComputedStyle(node).display === 'none') return;
 
     if (tag === 'BR') { flush(); return; }
@@ -577,8 +535,8 @@ function handleCredentialResponse(response) {
   // used locally as a cache key; the server never trusts a client-supplied ID.
   window.currentIdToken = response.credential;
   window.currentUserGoogleId = responsePayload.sub;
+  window.currentEmail = String(responsePayload.email || '').toLowerCase();
   setSignedInUI(responsePayload.email || responsePayload.name);
-  loadTripDetails();
 
   const pName = document.getElementById('parentName');
   const pEmail = document.getElementById('parentEmail');
@@ -595,7 +553,8 @@ function handleCredentialResponse(response) {
     adultEmails.value = responsePayload.email;
   }
 
-  loadUserProfile(responsePayload.sub);
+  loadSlipData(responsePayload.sub);
+  flushSlipOutbox();
 
   document.querySelectorAll('#permissionForm input[name*="signature" i]').forEach(el => {
     el.value = '';
@@ -616,7 +575,9 @@ function setSignedInUI(label) {
 function clearSignedInState() {
   window.currentIdToken = null;
   window.currentUserGoogleId = null;
+  window.currentEmail = '';
   setUserProfiles({});
+  renderSlipOutbox();
   setSignedInUI(null);
 }
 
@@ -706,59 +667,56 @@ function autofillActiveProfile() {
   if (key && first && !key.value.trim()) fillProfile(kind, first);
 }
 
-// Shows the copy kept on this device straight away, then replaces it with the server's.
+// Shows the copy kept on this device straight away.
+function useSavedProfiles() {
+  let cached = {};
+  try { cached = JSON.parse(localStorage.getItem(profilesCacheKey())) || {}; } catch (e) {}
+  setUserProfiles(cached);
+}
+
+// Replaces what is shown (and the copy on this device) with the server's profiles.
+function applyServerProfiles(profiles) {
+  setUserProfiles(profiles);
+  localStorage.setItem(profilesCacheKey(), JSON.stringify(window.userProfiles));
+  autofillActiveProfile();
+}
+
 function loadUserProfile(googleUserId) {
   if (!googleUserId) return;
-  const cacheKey = profilesCacheKey();
-  let cached = {};
-  try { cached = JSON.parse(localStorage.getItem(cacheKey)) || {}; } catch (e) {}
-  setUserProfiles(cached);
+  useSavedProfiles();
 
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'getProfile', idToken: window.currentIdToken })
-  })
-    .then(res => res.json())
-    .then(r => {
-      if (!r || r.error || !r.profiles) return;
-      setUserProfiles(r.profiles);
-      localStorage.setItem(cacheKey, JSON.stringify(window.userProfiles));
-      autofillActiveProfile();
-    })
+  TroopOffline.send(APPS_SCRIPT_URL, { action: 'getProfile', idToken: window.currentIdToken })
+    .then(r => { if (r && !r.error && r.profiles) applyServerProfiles(r.profiles); })
     .catch(err => console.log('Profile fetch error:', err));
 }
 
-// Saves the visible section's data-profile inputs as that person's profile, on this device
-// and on the server. (The server decides whether it updates an existing row or adds one.)
-function saveUserProfile() {
-  if (!window.currentUserGoogleId || !window.currentIdToken) return;
+// The visible section's data-profile inputs as { kind, profileData }, or null when there is no name
+// to save them under. Sent with the slip (see handleFormSubmit); the server decides whether it
+// updates an existing row or adds one.
+function collectProfile() {
   const kind = activeProfileKind();
   const section = kind && profileSection(kind);
   const key = kind && profileKeyInput(kind);
-  if (!section || !key) return;
+  if (!section || !key) return null;
 
-  const form = document.getElementById('permissionForm');
-  const formData = new FormData(form);
+  const formData = new FormData(document.getElementById('permissionForm'));
   const profileData = {};
   new Set(Array.from(section.querySelectorAll('[data-profile]')).map(el => el.name)).forEach(name => {
     const values = formData.getAll(name);
     if (values.length) profileData[name] = values.length > 1 ? values : values[0];
   });
-  const name = profileNameOf(kind, profileData);
-  if (!name) return;
+  return profileNameOf(kind, profileData) ? { kind, profileData } : null;
+}
 
+// After a successful submit, keep the saved copy on this device in step with what the server saved.
+function rememberProfileLocally(profile) {
+  if (!window.currentUserGoogleId) return; // signed out meanwhile (an expired sign-in): nothing to key it under
+  const { kind, profileData } = profile;
+  const name = profileNameOf(kind, profileData);
   const list = (window.userProfiles[kind] || []).slice();
   const i = list.findIndex(p => sameName(profileNameOf(kind, p), name));
   if (i >= 0) list[i] = Object.assign({}, list[i], profileData); else list.push(profileData);
   const profiles = Object.assign({}, window.userProfiles, { [kind]: list });
   setUserProfiles(profiles);
   localStorage.setItem(profilesCacheKey(), JSON.stringify(profiles));
-
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'saveProfile', idToken: window.currentIdToken, kind, profileData })
-  })
-    .then(res => res.json())
-    .then(r => { if (r.status !== 'success') console.error('Save profile:', r.message); })
-    .catch(err => console.error('Save profile error:', err));
 }

@@ -46,7 +46,8 @@ function fakeSheet(rows, name) {
     getLastRow: () => rows.length,
     getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0),
     appendRow: (r) => { rows.push(r.slice()); },
-    getRange: range
+    getRange: range,
+    getDataRange: () => range(1, 1, Math.max(rows.length, 1), Math.max(rows.reduce((m, r) => Math.max(m, r.length), 0), 1))
   };
 }
 
@@ -126,9 +127,10 @@ test("appendRecord_ refuses to grow a sheet past the column cap", () => {
 function makeHub() {
   const logged = [];
   const photoCalls = [];
-  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Code.gs"], {
+  const ctx = loadGs(["Sheets.gs", "Trips.gs", "Leaders.gs", "Hub.gs", "Library.gs", "Slip.gs", "Auth.gs", "Code.gs"], {
     logEvent_: (stage, detail) => logged.push([stage, detail]),
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) }
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
+    Utilities: { base64EncodeWebSafe: () => "rev", computeDigest: () => "d", DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 } }
   });
   const ss = fakeSpreadsheet();
   const trips = {
@@ -237,7 +239,12 @@ test("addTrip_ on an existing sheet: next ID, new form field becomes a column, t
   const old = ["20261201", "Old", "", "", "", "", "", "", "", "", "TRUE", "FALSE"];
   const { ctx, ss, trips } = makeTripSheet([headers.slice(), old.slice()]);
   const res = plain(ctx.addTrip_({ idToken: "t", values: formValues({ tripGear: "Tents" }) }));
-  assert.deepStrictEqual(res, { status: "success", tripId: "20261202" });
+  assert.deepStrictEqual([res.status, res.tripId], ["success", "20261202"]);
+  // the refreshed trip list and templates come back in the same call
+  assert.deepStrictEqual(res.trips.map((t) => t.tripId), ["20261201", "20261202"]);
+  assert.strictEqual(res.trips[1].acceptingResponses, true);
+  assert.strictEqual(res.trips[1].tripGear, "Tents");
+  assert.deepStrictEqual(res.templates.map((t) => t.tripId), ["20261202", "20261201"]);
   assert.deepStrictEqual(plain(trips.rows[0]), headers.concat(["tripGear"]));
   assert.deepStrictEqual(plain(trips.rows[1]), old);
   const row = plain(trips.rows[2]);
@@ -255,7 +262,7 @@ test("addTrip_ on an existing sheet: next ID, new form field becomes a column, t
 test("addTrip_ on an empty Trips sheet creates headers from the form", () => {
   const { ctx, trips } = makeTripSheet([]);
   const res = plain(ctx.addTrip_({ idToken: "t", values: { tripTitle: "A", tripMonth: "2026-01" } }));
-  assert.deepStrictEqual(res, { status: "success", tripId: "20260101" });
+  assert.deepStrictEqual([res.status, res.tripId], ["success", "20260101"]);
   assert.deepStrictEqual(plain(trips.rows[0]),
     ["tripId", "tripTitle", "customDepartureHtml", "acceptingResponses", "acceptingReceipts"]);
 });
@@ -423,6 +430,270 @@ test("slip submission: flags come from SLIP_KINDS and no profile is saved from i
   assert.ok(flagsOf().includes("Missing name"));
   assert.strictEqual(ss.sheets["Youth Profiles"], undefined);
   assert.strictEqual(ss.sheets["Adult Profiles"], undefined);
+});
+
+test("tripResponsesFrom_: one trip, latest slip per person, no signature columns", () => {
+  const { ctx } = makeHub();
+  const grid = [
+    ["Timestamp", "Form Type", "Youth Name", "Adult Name", "Parent Signature", "Adult Signature", "Medical Notes", "tripId", "_note"],
+    ["t1", "Youth", "Sam Scout", "", "Mom", "", "old", "20261101", "x"],
+    ["t2", "Adult", "", "Al Adult", "", "Al", "", "20261101", "x"],
+    ["t3", "Youth", "Other Trip Kid", "", "Mom", "", "", "20261102", "x"],
+    ["t4", "Youth", "  sam  scout", "", "Mom", "", "new", "20261101", "x"]
+  ];
+  const out = plain(ctx.tripResponsesFrom_(grid, "20261101"));
+  assert.deepStrictEqual(out.map((r) => r.Timestamp), ["t2", "t4"]);
+  assert.strictEqual(out[1]["Medical Notes"], "new");
+  out.forEach((r) => {
+    assert.ok(!("Parent Signature" in r) && !("Adult Signature" in r) && !("_note" in r));
+  });
+  assert.deepStrictEqual(plain(ctx.tripResponsesFrom_(grid, "nope")), []);
+  assert.deepStrictEqual(plain(ctx.tripResponsesFrom_([["a"]], "1")), []);
+});
+
+test("hubFloatPlan needs the manageTrips permission", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Responses = fakeSheet([["Form Type", "Youth Name", "tripId"], ["Youth", "Sam", "20261101"]], "Responses");
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "l@x.com", emailVerified: true });
+  const ask = () => plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: false });
+  assert.strictEqual(ask().code, "not_allowed");
+  ctx.getLeaderPermissions_ = () => null;
+  assert.strictEqual(ask().code, "not_allowed");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  const ok = ask();
+  assert.strictEqual(ok.status, "success");
+  assert.deepStrictEqual(ok.responses.map((r) => r["Youth Name"]), ["Sam"]);
+});
+
+test("hubMeta_ keeps only a well-formed clientId and a sane enteredAt", () => {
+  const { ctx } = makeHub();
+  const now = new Date("2026-11-10T12:00:00Z");
+  const meta = (d) => { const m = ctx.hubMeta_(d, now); return { clientId: m.clientId, enteredAt: m.enteredAt && m.enteredAt.toISOString(), late: m.late }; };
+  assert.deepStrictEqual(meta({ clientId: "abc12345-uuid", enteredAt: "2026-11-10T11:50:00Z" }), { clientId: "abc12345-uuid", enteredAt: "2026-11-10T11:50:00.000Z", late: true });
+  assert.strictEqual(meta({ enteredAt: "2026-11-10T11:59:00Z" }).late, false); // within a couple of minutes: not queued
+  assert.strictEqual(meta({ enteredAt: "2026-11-10T13:00:00Z" }).enteredAt, "2026-11-10T12:00:00.000Z"); // future: clamped to now
+  assert.strictEqual(meta({ enteredAt: "2025-01-01T00:00:00Z" }).enteredAt, null); // older than 90 days
+  assert.deepStrictEqual(meta({ enteredAt: "not a date" }), { clientId: "", enteredAt: null, late: false });
+  ["short", "=1+1+1+1+1", "-abcdefghij", "has space 12345", "x".repeat(65)].forEach((id) => assert.strictEqual(meta({ clientId: id }).clientId, "", id));
+  assert.deepStrictEqual(meta(undefined), { clientId: "", enteredAt: null, late: false });
+});
+
+test("columnHasValue_ looks under the named header only", () => {
+  const { ctx } = makeHub();
+  const sheet = fakeSheet([["A", "Client ID"], ["id-1", "x"], ["y", "id-2"]]);
+  assert.strictEqual(ctx.columnHasValue_(sheet, "client id", "id-2"), true);
+  assert.strictEqual(ctx.columnHasValue_(sheet, "Client ID", "id-1"), false);
+  assert.strictEqual(ctx.columnHasValue_(sheet, "Nope", "id-2"), false);
+  assert.strictEqual(ctx.columnHasValue_(fakeSheet([]), "Client ID", "id-2"), false);
+});
+
+test("hub records from a device: Entered At and Client ID columns, and a retry is not written twice", () => {
+  const { ctx, ss, photoCalls } = makeHub();
+  const entered = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const send = () => plain(ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt,
+    { tripId: "20261101", values: { Description: "Pizza", Amount: "12.50" }, photo: { data: "abc" }, clientId: "device-0001", enteredAt: entered }, "a@x.com"));
+  assert.deepStrictEqual(send(), { status: "success" });
+  assert.deepStrictEqual(send(), { status: "success", duplicate: true });
+  const rows = ss.sheets.Receipts.rows;
+  assert.strictEqual(rows.length, 2); // header + one row
+  assert.deepStrictEqual(plain(rows[0]), ["Timestamp", "Entered At", "Trip ID", "Trip", "Description", "Amount", "Receipt URL", "Submitted By", "Client ID"]);
+  assert.strictEqual(plain(rows[1])[8], "device-0001");
+  assert.strictEqual(new Date(rows[1][1]).toISOString(), entered);
+  assert.strictEqual(photoCalls.length, 1); // the retry didn't upload the photo again
+});
+
+test("hub records: a late entry for a closed trip is accepted, an on-time one is not", () => {
+  const { ctx, ss, logged } = makeHub();
+  const base = { tripId: "20261102", values: { Description: "Gas", Amount: "30" } }; // acceptingReceipts FALSE
+  const onTime = ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt, Object.assign({ clientId: "device-0002", enteredAt: new Date().toISOString() }, base), "a@x.com");
+  assert.strictEqual(plain(onTime).code, "closed");
+  assert.strictEqual(plain(ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt, base, "a@x.com")).code, "closed"); // no metadata
+  const late = plain(ctx.hubAppendRecord_(ctx.HUB_RECORDS.receipt,
+    Object.assign({ clientId: "device-0003", enteredAt: new Date(Date.now() - 3600 * 1000).toISOString() }, base), "a@x.com"));
+  assert.strictEqual(late.status, "success");
+  assert.strictEqual(ss.sheets.Receipts.rows.length, 2);
+  assert.ok(logged.some((l) => l[0] === "late record accepted"));
+});
+
+test("hub records: a bad clientId is ignored, and the new column names are reserved", () => {
+  const { ctx, ss } = makeHub();
+  const res = plain(ctx.hubAppendRecord_(ctx.HUB_RECORDS.payment, { tripId: "20261101", values: { Scout: "Sam" }, clientId: "=bad" }, "t@x.com"));
+  assert.strictEqual(res.status, "success");
+  assert.ok(!plain(ss.sheets.Payments.rows[0]).includes("Client ID"));
+  ["Client ID", "entered at"].forEach((name) => {
+    assert.strictEqual(plain(ctx.hubAppendRecord_(ctx.HUB_RECORDS.payment, { tripId: "20261101", values: { Scout: "Sam", [name]: "x" } }, "t@x.com")).code, "invalid", name);
+  });
+});
+
+test("slip submission: a changed or missing trip revision is accepted and flagged", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "new" });
+  const base = { _idToken: "t", _tripId: "20261101", "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" };
+  const flagsOf = () => { const rows = ss.sheets.Responses.rows; return rows[rows.length - 1][plain(rows[0]).indexOf("Flags")]; };
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", Object.assign({ _tripRevision: "old" }, base))).status, "success");
+  assert.ok(flagsOf().includes("Trip changed after the form loaded"));
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", base)).status, "success");
+  assert.ok(flagsOf().includes("No trip revision"));
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", Object.assign({ _tripRevision: "new" }, base))).status, "success");
+  assert.ok(!flagsOf().includes("Trip"));
+  assert.strictEqual(ss.sheets.Responses.rows.length, 4);
+});
+
+test("slip submission from a device: Client ID and Entered At columns, and a retry is not written twice", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "r" });
+  const signed = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const slip = (extra) => Object.assign({ _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" }, extra);
+  const send = (extra) => plain(ctx.handlePermissionPost_("{}", slip(extra)));
+
+  assert.deepStrictEqual(send({ _clientId: "slip-device-01", _enteredAt: signed }), { status: "success" });
+  assert.deepStrictEqual(send({ _clientId: "slip-device-01", _enteredAt: signed }), { status: "success", duplicate: true });
+  const rows = ss.sheets.Responses.rows;
+  assert.strictEqual(rows.length, 2); // header + one row
+  const head = plain(rows[0]);
+  assert.strictEqual(rows[1][head.indexOf("Client ID")], "slip-device-01");
+  assert.strictEqual(new Date(rows[1][head.indexOf("Entered At")]).toISOString(), signed);
+  assert.ok(!plain(rows[1]).join("|").includes("_clientId"));
+
+  // a slip with no ID (an old page) is still accepted, and two of them are two rows
+  send({}); send({});
+  assert.strictEqual(ss.sheets.Responses.rows.length, 4);
+  // the browser can't fill the server's columns by naming a form field the same way
+  send({ "client id": "spoof-12345", "ENTERED AT": "yesterday" });
+  const last = plain(ss.sheets.Responses.rows[4]);
+  assert.ok(!last.includes("spoof-12345") && !last.includes("yesterday"));
+});
+
+test("slip submission: a slip signed offline is accepted after the trip closed; an on-time one is not", () => {
+  const { ctx, ss, logged } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "FALSE", _tripRevision: "r" });
+  const slip = (extra) => Object.assign({ _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Adult", "Adult Name": "Al", "Adult Signature": "Al" }, extra);
+  const hoursAgo = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({}))).code, "closed");
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({ _clientId: "slip-device-02", _enteredAt: new Date().toISOString() }))).code, "closed");
+  assert.strictEqual(ss.sheets.Responses, undefined);
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", slip({ _clientId: "slip-device-03", _enteredAt: hoursAgo }))).status, "success");
+  const rows = ss.sheets.Responses.rows;
+  assert.ok(rows[1][plain(rows[0]).indexOf("Flags")].includes("Trip closed before the slip was sent"));
+  assert.ok(logged.some((l) => l[0] === "late slip accepted"));
+});
+
+test("hubSessionOrNull_ bundles permissions, trips and templates, and never throws", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Trips = fakeSheet([["tripId", "tripTitle", "acceptingResponses"], ["20261101", "Camp", "FALSE"]], "Trips");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true, recordReimbursements: false });
+  const s = plain(ctx.hubSessionOrNull_("a@x.com"));
+  assert.deepStrictEqual([s.status, s.email, s.permissions], ["success", "a@x.com", { manageTrips: true, recordReimbursements: false }]);
+  assert.deepStrictEqual(s.trips.map((t) => t.tripTitle), ["Camp"]);
+  assert.deepStrictEqual(s.templates.map((t) => t.tripId), ["20261101"]);
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: false });
+  assert.strictEqual(plain(ctx.hubSessionOrNull_("a@x.com")).templates, undefined); // templates are for people who manage trips
+  ctx.getLeaderPermissions_ = () => { throw new Error("sheet unavailable"); };
+  assert.strictEqual(ctx.hubSessionOrNull_("a@x.com"), null);
+});
+
+test("signing in (Google remember-me or email code) returns the session in the same response", () => {
+  const { ctx, ss } = makeHub();
+  ss.sheets.Trips = fakeSheet([["tripId", "tripTitle", "acceptingResponses"], ["20261101", "Camp", "TRUE"]], "Trips");
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  ctx.issueSessionToken_ = (email) => "ts1.token-for-" + email;
+
+  ctx.isSessionToken_ = () => false;
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "a@x.com", emailVerified: true, sub: "1", name: "A" });
+  const ex = plain(ctx.authExchange_({ idToken: "google" }));
+  assert.deepStrictEqual([ex.status, ex.token, ex.session.email], ["success", "ts1.token-for-a@x.com", "a@x.com"]);
+  assert.deepStrictEqual(ex.session.trips.map((t) => t.tripTitle), ["Camp"]);
+  assert.strictEqual(ex.session.permissions.manageTrips, true);
+
+  // email code: a cache holding the right code
+  const store = {};
+  ctx.CacheService = { getScriptCache: () => ({ get: (k) => store[k] || null, put: (k, v) => { store[k] = v; }, remove: (k) => { delete store[k]; } }) };
+  ctx.hmacB64_ = (t) => "h(" + t + ")";
+  ctx.emailKey_ = (prefix, email) => prefix + email;
+  store["code_b@x.com"] = JSON.stringify({ h: "h(b@x.com:123456)", tries: 0 });
+  const v = plain(ctx.authVerifyCode_({ email: "b@x.com", code: "123456" }));
+  assert.deepStrictEqual([v.status, v.session.email], ["success", "b@x.com"]);
+  assert.strictEqual(plain(ctx.authVerifyCode_({ email: "b@x.com", code: "123456" })).code, "bad_code"); // the code is single-use
+
+  // if the sheets are unavailable the sign-in still works; the page then asks for the session itself
+  store["code_c@x.com"] = JSON.stringify({ h: "h(c@x.com:123456)", tries: 0 });
+  ctx.getLeaderPermissions_ = () => { throw new Error("sheet unavailable"); };
+  const c = plain(ctx.authVerifyCode_({ email: "c@x.com", code: "123456" }));
+  assert.strictEqual(c.status, "success");
+  assert.strictEqual(c.session, null);
+});
+
+test("hubLists and hubFloatPlan carry the equipment list, and a broken list can't break the answer", () => {
+  const { ctx, ss } = makeHub();
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "l@x.com", emailVerified: true });
+  ctx.getLeaderPermissions_ = () => ({ manageTrips: true });
+  ss.sheets.Equipment = fakeSheet([["item", "quantity"], ["Tent", "3"]]);
+  ss.sheets.Responses = fakeSheet([["Form Type", "Youth Name", "tripId"], ["Youth", "Sam", "20261101"]], "Responses");
+  ctx.findSpreadsheet_ = (role) => (role === "equipment" ? ss : null);
+  const lists = plain(ctx.handleHub_({ action: "hubLists", idToken: "t" }));
+  assert.deepStrictEqual(lists.equipment, { status: "success", items: [{ item: "Tent", quantity: "3" }] });
+  assert.strictEqual(lists.recipes.code, "config"); // recipes not set up: reported on its own
+  const plan = plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  assert.deepStrictEqual(plan.responses.map((r) => r["Youth Name"]), ["Sam"]);
+  assert.deepStrictEqual(plan.equipment.items, [{ item: "Tent", quantity: "3" }]);
+  ctx.findSpreadsheet_ = () => { throw new Error("spreadsheet unavailable"); };
+  const broken = plain(ctx.handleHub_({ action: "hubFloatPlan", idToken: "t", tripId: "20261101" }));
+  assert.strictEqual(broken.status, "success"); // the roster still comes back
+  assert.strictEqual(broken.equipment.status, "error");
+});
+
+test("slipLoad: profiles and (when asked for) the trip in one call", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "mom@x.com", emailVerified: true });
+  ctx.getTripConfig_ = (_ss, id) => (id === "20261101" ? { tripId: id, tripTitle: "Camp", acceptingResponses: "TRUE" } : null);
+  save(ctx, "youth", "mom@x.com", youthFields());
+  const both = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "20261101" }));
+  assert.strictEqual(both.status, "success");
+  assert.strictEqual(both.trip.tripTitle, "Camp");
+  assert.deepStrictEqual(both.profiles.youth.map((p) => p["Youth Name"]), ["Sam Scout"]);
+  const noTrip = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t" }));
+  assert.strictEqual(noTrip.trip, undefined);
+  assert.strictEqual(noTrip.profiles.youth.length, 1);
+  const unknown = plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "nope" }));
+  assert.strictEqual(unknown.trip.code, "not_found"); // reported inside, profiles still returned
+  assert.strictEqual(unknown.profiles.youth.length, 1);
+  ctx.verifyGoogleTokenInfo_ = () => null;
+  assert.strictEqual(plain(ctx.handlePermissionPost_("{}", { action: "slipLoad", idToken: "t", tripId: "20261101" })).code, "signin");
+});
+
+test("slip submission saves the profile in the same call, and never lets that block the slip", () => {
+  const { ctx, ss } = makeHub();
+  ctx.jsonOut_ = (x) => x;
+  ctx.verifyGoogleToken_ = () => "sub";
+  ctx.verifyGoogleTokenInfo_ = () => ({ email: "mom@x.com", emailVerified: true });
+  ctx.getTripConfig_ = () => ({ tripId: "20261101", acceptingResponses: "TRUE", _tripRevision: "r" });
+  const base = { _idToken: "t", _tripId: "20261101", _tripRevision: "r", "Form Type": "Youth", "Youth Name": "Sam Scout", "Parent Signature": "Mom", "Youth Signature": "Sam", "Helmet?": "Yes" };
+  const submit = (extra) => plain(ctx.handlePermissionPost_("{}", Object.assign({}, base, extra)));
+
+  assert.strictEqual(submit({ _profile: { kind: "youth", data: youthFields({ Rank: "Scout" }) } }).status, "success");
+  const profile = plain(ctx.getUserProfiles_("mom@x.com")).youth;
+  assert.deepStrictEqual(profile.map((p) => [p["Youth Name"], p.Rank]), [["Sam Scout", "Scout"]]);
+  assert.ok(!("Helmet?" in profile[0]) && !("Parent Signature" in profile[0])); // one-off answers and signatures are not profile data
+  assert.ok(plain(ss.sheets.Responses.rows[0]).includes("Helmet?"));
+  assert.ok(!plain(ss.sheets.Responses.rows[0]).includes("_profile"));
+
+  // a refused or broken profile still lets the slip through; the honeypot saves nothing
+  assert.strictEqual(submit({ _profile: { kind: "nope", data: {} } }).status, "success");
+  assert.strictEqual(submit({ _profile: "garbage" }).status, "success");
+  ctx.saveProfile_ = () => { throw new Error("boom"); };
+  assert.strictEqual(submit({ _profile: { kind: "youth", data: youthFields() } }).status, "success");
+  ctx.saveProfile_ = () => { throw new Error("must not be called"); };
+  assert.strictEqual(submit({ website_url: "spam.example", _profile: { kind: "youth", data: youthFields() } }).status, "success");
+  assert.strictEqual(ss.sheets.Responses.rows.length, 6);
 });
 
 test("HUB_RECORDS entries are well-formed", () => {

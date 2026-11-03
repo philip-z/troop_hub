@@ -23,7 +23,8 @@ function nextTripId_(month, existingIds) {
 // Returns the Trips row with this tripId as an object keyed by header, or null.
 // The trip always comes from the server, never from the browser. _tripRevision is a
 // fingerprint of the row; the slip page sends it back on submit so edits made while a
-// parent had the form open are detected. It is computed here, not a sheet column.
+// parent had the form open are detected (the slip is still accepted, with a note in its
+// Flags column). It is computed here, not a sheet column.
 function getTripConfig_(ss, tripId) {
   var id = String(tripId === undefined || tripId === null ? '' : tripId).trim();
   var sheet;
