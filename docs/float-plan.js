@@ -1,23 +1,11 @@
 (function () {
   const C = window.TROOP_CONFIG;
   const $ = (id) => document.getElementById(id);
-  let idToken = null, userEmail = "", trips = [], currentTripResponses = [];
+  let idToken = null, userEmail = "", currentTripResponses = [];
 
+  // The shared transport (offline.js) flags a missing reply as err.network or err.retry.
   async function api(action, payload) {
-    let res;
-    try {
-      res = await fetch(C.APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({}, payload, { action, idToken }))
-      });
-    } catch (e) {
-      throw Object.assign(new Error("There is no connection to the server."), { network: true });
-    }
-    if (!res.ok) throw Object.assign(new Error("Server error " + res.status), { retry: true });
-    let d;
-    try { d = await res.json(); }
-    catch (e) { throw Object.assign(new Error("The server sent a reply that could not be read."), { retry: true }); }
+    const d = await TroopOffline.send(C.APPS_SCRIPT_URL, Object.assign({}, payload, { action, idToken }));
     if (d.status === "error" || d.error) {
       if (d.code === "signin") TroopAuth.signOut();
       throw Object.assign(new Error(d.message || d.error), { code: d.code });

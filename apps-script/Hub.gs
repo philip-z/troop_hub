@@ -27,10 +27,10 @@ function hubReceiptsFolder_() {
 function hubSaveReceiptPhoto_(tripId, base64) {
   var bytes;
   try { bytes = Utilities.base64Decode(String(base64)); }
-  catch (e) { return { error: hubError_('invalid', 'The photo could not be read.') }; }
-  if (bytes.length > RECEIPT_PHOTO_MAX_BYTES) return { error: hubError_('invalid', 'That photo is too large.') };
+  catch (e) { return { error: errorReply_('invalid', 'The photo could not be read.') }; }
+  if (bytes.length > RECEIPT_PHOTO_MAX_BYTES) return { error: errorReply_('invalid', 'That photo is too large.') };
   if (bytes.length < 3 || bytes[0] !== -1 || bytes[1] !== -40) { // FF D8 = JPEG
-    return { error: hubError_('invalid', 'The photo must be a JPEG image.') };
+    return { error: errorReply_('invalid', 'The photo must be a JPEG image.') };
   }
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss');
   var name = 'receipt-' + tripId + '-' + stamp + '-' + Math.floor(Math.random() * 1e6) + '.jpg';
@@ -52,10 +52,6 @@ var HUB_RECORDS = {
   payment:       { tab: 'Payments', permission: 'manageTrips', byColumn: 'Recorded By' },
   reimbursement: { tab: 'Reimbursements', permission: 'recordReimbursements', byColumn: 'Recorded By' }
 };
-
-function hubError_(code, message) {
-  return { status: 'error', code: code, message: message };
-}
 
 // { manageTrips: bool, ... } from the Leaders sheet; all false for someone who isn't listed.
 function hubPermissions_(email) {
@@ -90,11 +86,11 @@ function hubSessionOrNull_(email) {
 function hubAuth_(data, permission) {
   var info = verifyGoogleTokenInfo_(data.idToken);
   if (!info || !info.emailVerified) {
-    return { error: hubError_('signin', 'Your sign-in has expired or is invalid. Please sign in again.') };
+    return { error: errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.') };
   }
   info.permissions = hubPermissions_(info.email);
   if (permission && !info.permissions[permission]) {
-    return { error: hubError_('not_allowed', 'Your account (' + info.email + ') is not allowed to do that. Ask a leader to tick ' + permission + ' for you on the Leaders sheet.') };
+    return { error: errorReply_('not_allowed', 'Your account (' + info.email + ') is not allowed to do that. Ask a leader to tick ' + permission + ' for you on the Leaders sheet.') };
   }
   return { info: info };
 }
@@ -106,7 +102,7 @@ function hubOptionalList_(read) {
     return read();
   } catch (e) {
     console.error('List failed: ' + e);
-    return hubError_('error', 'That list could not be read right now.');
+    return errorReply_('error', 'That list could not be read right now.');
   }
 }
 
@@ -148,17 +144,17 @@ function handleHub_(data) {
 
     case 'hubSubmit':
       var spec = HUB_RECORDS[data.kind];
-      if (!spec) return hubError_('invalid', 'Unknown record type.');
+      if (!spec) return errorReply_('invalid', 'Unknown record type.');
       auth = hubAuth_(data, spec.permission);
       if (auth.error) return auth.error;
       return hubAppendRecord_(spec, data, auth.info.email);
   }
-  return hubError_('invalid', 'Unknown action.');
+  return errorReply_('invalid', 'Unknown action.');
 }
 
 // One entry per trip for the hub's list: every Trips column under its own header name
 // (see tripSummary_). Trips that accept permission slips also carry
-// `slip`: the same config slipTrip returns, so the slip page can open without another call.
+// `slip`: the trip's slip config (see permissionTripConfig_), so the slip page can open without another call.
 function hubListTrips_() {
   var sheet;
   try {
@@ -249,16 +245,16 @@ function hubAlreadySaved_(spec, meta) {
 function hubAppendRecord_(spec, data, email) {
   var meta = hubMeta_(data);
   var trip = getTripConfig_(getSpreadsheet_('trips'), data.tripId);
-  if (!trip) return hubError_('not_found', 'Trip not found.');
+  if (!trip) return errorReply_('not_found', 'Trip not found.');
   if (spec.tripFlag && !isTruthy_(trip[spec.tripFlag])) {
-    if (!meta.late) return hubError_('closed', spec.closedMessage || 'This trip is not accepting that.');
+    if (!meta.late) return errorReply_('closed', spec.closedMessage || 'This trip is not accepting that.');
     logEvent_('late record accepted', spec.tab + ': trip ' + trip.tripId + ' closed, entered ' + meta.enteredAt.toISOString());
   }
   if (hubAlreadySaved_(spec, meta)) return { status: 'success', duplicate: true };
 
   // Validate the fields before uploading anything.
   var clean = cleanRecordFields_(data.values, hubReservedNames_(spec));
-  if (clean.error) return hubError_('invalid', clean.error);
+  if (clean.error) return errorReply_('invalid', clean.error);
 
   var url = '';
   if (spec.photoColumn && data.photo && data.photo.data) {
@@ -274,7 +270,7 @@ function hubAppendRecord_(spec, data, email) {
     if (hubAlreadySaved_(spec, meta)) return { status: 'success', duplicate: true };
     var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.tab, true);
     var result = appendRecord_(sheet, clean.fields, server.before, server.after);
-    if (result.error) return hubError_('invalid', result.error);
+    if (result.error) return errorReply_('invalid', result.error);
   } finally {
     lock.releaseLock();
   }

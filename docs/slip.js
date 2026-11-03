@@ -145,7 +145,7 @@ function applyTripDetails(data) {
   });
 }
 
-// The hub saves each open trip's slip config (the same data slipTrip returns) on this device
+// The hub saves each open trip's slip config (see permissionTripConfig_ in Slip.gs) on this device
 // (offline.js), so arriving from the hub needs no server call and works with no signal. Edits made
 // to the sheet afterwards only add a note to the response's Flags column on submit.
 function cachedTripDetails() {
@@ -170,11 +170,7 @@ function loadSlipData(googleUserId) {
   if (cached) { applyTripDetails(cached); loadUserProfile(googleUserId); return; }
 
   useSavedProfiles();
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'slipLoad', tripId: TRIP_ID, idToken: window.currentIdToken })
-  })
-    .then(res => res.json())
+  TroopOffline.send(APPS_SCRIPT_URL, { action: 'slipLoad', tripId: TRIP_ID, idToken: window.currentIdToken })
     .then(data => {
       if (data.code === 'signin') { TroopAuth.signOut(); return; }
       if (data.status === 'error') { showTripUnavailable(data.message || 'This trip is unavailable.'); return; }
@@ -689,11 +685,7 @@ function loadUserProfile(googleUserId) {
   if (!googleUserId) return;
   useSavedProfiles();
 
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify({ action: 'getProfile', idToken: window.currentIdToken })
-  })
-    .then(res => res.json())
+  TroopOffline.send(APPS_SCRIPT_URL, { action: 'getProfile', idToken: window.currentIdToken })
     .then(r => { if (r && !r.error && r.profiles) applyServerProfiles(r.profiles); })
     .catch(err => console.log('Profile fetch error:', err));
 }

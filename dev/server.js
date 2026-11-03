@@ -234,12 +234,6 @@ function slipPost(data) {
     }
     return out;
   }
-  if (data.action === "slipTrip") {
-    if (!verify(data.idToken)) return err("signin", "Please sign in to view this trip.");
-    const t = tripConfig(data.tripId);
-    if (!t) return err("not_found", "Trip not found.");
-    return truthy(t.acceptingResponses) ? t : err("closed", "This trip is not accepting permission slips.");
-  }
   if (!verify(data._idToken)) return err("signin", "Your sign-in has expired. Please sign in again; your entries are still on the form.");
   const trip = tripConfig(data._tripId);
   if (!trip) return err("not_found", "Trip not found.");

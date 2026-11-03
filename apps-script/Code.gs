@@ -7,7 +7,6 @@ var DEFAULT_OAUTH_CLIENT_ID = '1059045077738-ohkb0nupq7kh69kj3i5io9n1rbjmfn8m.ap
 // the sheet: 'Log(Enabled)' logs, 'Log(Disabled)' (or no sheet) does not.
 // Never throws and never logs tokens or personal data.
 var LOG_SHEET_ENABLED = 'Log(Enabled)';
-var tokenFailReason_ = '';
 function logEvent_(stage, detail) {
   try {
     var ss = getSpreadsheet_('trips');
@@ -55,15 +54,24 @@ function jsonOut_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// The one shape of a failed reply, used by every file: { status: 'error', code, message }. The pages
+// read status / code / message (code 'signin' means "sign in again"); code is left out when empty.
+function errorReply_(code, message) {
+  var reply = { status: 'error' };
+  if (code) reply.code = code;
+  reply.message = message;
+  return reply;
+}
+
 // ---------------------------------------------------------------------------
 // ENTRY POINTS: thin router. Each area lives in its own file:
 //   Hub.gs (index.html), Leaders.gs (add-trip.html), Slip.gs (slip.html)
 // ---------------------------------------------------------------------------
 
-// Trip details are never served without a sign-in: the slip page loads its trip with a
-// POST (action slipTrip) carrying the user's token. GET only reports that the service is up.
+// Nothing is served without a sign-in: every page POSTs with the user's token (the slip page loads
+// its trip with action slipLoad). GET never returns data.
 function doGet() {
-  return jsonOut_({ status: 'error', code: 'signin', message: 'Sign in required.' });
+  return jsonOut_(errorReply_('signin', 'Sign in required.'));
 }
 
 function doPost(e) {
@@ -80,7 +88,7 @@ function doPost(e) {
     if (typeof data.action === 'string' && data.action.indexOf('hub') === 0) return jsonOut_(handleHub_(data));
     return handlePermissionPost_(raw, data);
   } catch (err) {
-    return jsonOut_({ status: 'error', message: err.toString() });
+    return jsonOut_(errorReply_('', err.toString()));
   }
 }
 
@@ -88,50 +96,17 @@ function doPost(e) {
 // AUTH
 // ---------------------------------------------------------------------------
 
-// Client IDs whose tokens are accepted. The test client is only accepted when the
-// Script Property ALLOW_TEST_CLIENT is 'true', so production stays locked to one client.
+// Client IDs whose tokens are accepted: just ours, so production stays locked to one client.
 function getAllowedClientIds_() {
   var props = PropertiesService.getScriptProperties();
-  var ids = [props.getProperty('OAUTH_CLIENT_ID') || DEFAULT_OAUTH_CLIENT_ID];
-//  if (props.getProperty('ALLOW_TEST_CLIENT') === 'true') ids.push(TEST_OAUTH_CLIENT_ID);
-  return ids;
+  return [props.getProperty('OAUTH_CLIENT_ID') || DEFAULT_OAUTH_CLIENT_ID];
 }
 
-// Returns the verified Google user ID (the token's 'sub'), or null if the token is invalid.
+// Returns the verified user ID (the token's 'sub'), or null if the token is invalid. The checking
+// itself (Google or email-code token, audience, expiry, caching) is verifyGoogleTokenInfo_ in Leaders.gs.
 function verifyGoogleToken_(idToken) {
-  tokenFailReason_ = '';
-  if (!idToken || typeof idToken !== 'string') { tokenFailReason_ = 'missing token'; return null; }
-  if (isSessionToken_(idToken)) {
-    var session = verifySessionToken_(idToken);
-    if (!session) tokenFailReason_ = 'invalid or expired session token';
-    return session ? session.sub : null;
-  }
-  try {
-    var cache = CacheService.getScriptCache();
-    var key = 'tok_' + Utilities.base64EncodeWebSafe(
-      Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, idToken));
-    var hit = cache.get(key);
-    if (hit) return hit;
-
-    var res = UrlFetchApp.fetch(
-      'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken),
-      { muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) { tokenFailReason_ = 'tokeninfo HTTP ' + res.getResponseCode() + ' ' + res.getContentText().substring(0, 200); return null; }
-
-    var info = JSON.parse(res.getContentText());
-    if (getAllowedClientIds_().indexOf(info.aud) === -1) { tokenFailReason_ = 'aud mismatch: token aud=' + info.aud + ' expected one of=' + getAllowedClientIds_().join(','); return null; }     // must be minted for THIS client
-    if (Number(info.exp) * 1000 < Date.now()) { tokenFailReason_ = 'token expired'; return null; }  // not expired
-    if (!info.sub) return null;
-
-    // Never cache past the token's own expiry.
-    var ttl = Math.min(300, Math.floor(Number(info.exp) - Date.now() / 1000));
-    if (ttl > 0) cache.put(key, String(info.sub), ttl);
-    return String(info.sub);
-  } catch (err) {
-    console.error('Token verification failed: ' + err);
-    tokenFailReason_ = 'exception: ' + err;
-    return null;
-  }
+  var info = verifyGoogleTokenInfo_(idToken);
+  return info ? info.sub : null;
 }
 
 function escapeHtml_(s) {

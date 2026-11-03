@@ -138,9 +138,9 @@ function parseDepartureOptions_(html) {
 // the accepting flags are deliberately not copied.
 function listTripTemplates_(data) {
   var info = verifyGoogleTokenInfo_(data.idToken);
-  if (!info) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
+  if (!info) return errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.');
   if (!info.emailVerified || !hasLeaderPermission_(info.email, 'manageTrips')) {
-    return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to manage trips.' };
+    return errorReply_('not_allowed', 'Your account (' + info.email + ') is not allowed to manage trips.');
   }
   return { status: 'success', trips: tripTemplates_() };
 }
@@ -208,14 +208,14 @@ function buildTripRecord_(input) {
 
 function addTrip_(data) {
   var info = verifyGoogleTokenInfo_(data.idToken);
-  if (!info) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
+  if (!info) return errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.');
   if (!info.emailVerified || !hasLeaderPermission_(info.email, 'manageTrips')) {
-    return { status: 'error', code: 'not_allowed', message: 'Your account (' + info.email + ') is not allowed to manage trips. Ask a leader to tick manageTrips for you on the Leaders sheet.' };
+    return errorReply_('not_allowed', 'Your account (' + info.email + ') is not allowed to manage trips. Ask a leader to tick manageTrips for you on the Leaders sheet.');
   }
 
   // The form's values arrive as data.values (input name -> value).
   var rec = buildTripRecord_(data.values);
-  if (rec.error) return { status: 'error', code: 'invalid', message: rec.error };
+  if (rec.error) return errorReply_('invalid', rec.error);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -228,10 +228,10 @@ function addTrip_(data) {
     var existingIds = (idCol === -1 || sheet.getLastRow() < 2) ? [] :
       sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues().map(function(r) { return String(r[0]).trim(); });
     var tripId = nextTripId_(rec.month, existingIds);
-    if (!tripId) return { status: 'error', code: 'invalid', message: 'That month already has 99 trips.' };
+    if (!tripId) return errorReply_('invalid', 'That month already has 99 trips.');
 
     var result = appendRecord_(sheet, rec.fields, { tripId: tripId }, rec.after, { textCells: true });
-    if (result.error) return { status: 'error', code: 'invalid', message: result.error };
+    if (result.error) return errorReply_('invalid', result.error);
 
     // Who added it goes in a private log tab, never in Trips (the slip page shows Trips).
     var log = getOrCreateSheet_(ss, 'Trip Log', true);

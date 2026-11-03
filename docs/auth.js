@@ -13,14 +13,10 @@ window.TroopAuth = (function () {
     return claims;
   }
 
-  async function post(body) {
-    const res = await fetch(window.TROOP_CONFIG.APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error("Server error " + res.status);
-    return res.json();
+  // The shared transport (offline.js, loaded right after this file on every page); it throws a
+  // readable error when there is no usable reply.
+  function post(body) {
+    return window.TroopOffline.send(window.TROOP_CONFIG.APPS_SCRIPT_URL, body);
   }
 
   let emailBox = null;

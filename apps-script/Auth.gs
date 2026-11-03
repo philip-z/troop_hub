@@ -91,7 +91,7 @@ function cleanEmail_(v) {
 // Same response whether or not mail was sent, so this can't be used to probe addresses.
 function authRequestCode_(data) {
   var email = cleanEmail_(data.email);
-  if (!email) return { status: 'error', code: 'invalid', message: 'Enter a valid email address.' };
+  if (!email) return errorReply_('invalid', 'Enter a valid email address.');
   var generic = { status: 'success', message: 'If that address can receive mail, a sign-in code is on its way. It expires in 10 minutes.' };
 
   var cache = CacheService.getScriptCache();
@@ -103,10 +103,10 @@ function authRequestCode_(data) {
     var perEmail = Number(cache.get(perEmailKey) || 0);
     var globalCount = Number(cache.get('rc_global') || 0);
     if (perEmail >= CODE_REQUESTS_PER_EMAIL) {
-      return { status: 'error', code: 'rate_limit', message: 'Too many code requests for this address. Wait a few minutes and try again.' };
+      return errorReply_('rate_limit', 'Too many code requests for this address. Wait a few minutes and try again.');
     }
     if (globalCount >= CODE_REQUESTS_GLOBAL) {
-      return { status: 'error', code: 'rate_limit', message: 'Sign-in by email is busy. Try again later or use Google sign-in.' };
+      return errorReply_('rate_limit', 'Sign-in by email is busy. Try again later or use Google sign-in.');
     }
     cache.put(perEmailKey, String(perEmail + 1), CODE_TTL_SECONDS);
     cache.put('rc_global', String(globalCount + 1), 3600);
@@ -130,7 +130,7 @@ function authRequestCode_(data) {
 function authVerifyCode_(data) {
   var email = cleanEmail_(data.email);
   var code = String(data.code === undefined || data.code === null ? '' : data.code).replace(/\s+/g, '');
-  var bad = { status: 'error', code: 'bad_code', message: 'That code is wrong or has expired. Request a new one.' };
+  var bad = errorReply_('bad_code', 'That code is wrong or has expired. Request a new one.');
   if (!email || !/^\d{6}$/.test(code)) return bad;
 
   var cache = CacheService.getScriptCache();
@@ -159,8 +159,8 @@ function authVerifyCode_(data) {
 // "Remember me" for Google sign-in: swaps a live Google ID token for a 30-day session token.
 // Session tokens are refused here so a remembered session can't be renewed forever.
 function authExchange_(data) {
-  if (isSessionToken_(data.idToken)) return { status: 'error', code: 'signin', message: 'Please sign in with Google.' };
+  if (isSessionToken_(data.idToken)) return errorReply_('signin', 'Please sign in with Google.');
   var info = verifyGoogleTokenInfo_(data.idToken);
-  if (!info || !info.emailVerified || !info.email) return { status: 'error', code: 'signin', message: 'Your sign-in has expired or is invalid. Please sign in again.' };
+  if (!info || !info.emailVerified || !info.email) return errorReply_('signin', 'Your sign-in has expired or is invalid. Please sign in again.');
   return { status: 'success', token: issueSessionToken_(info.email, REMEMBER_TTL_SECONDS, info.sub, info.name), session: hubSessionOrNull_(info.email) };
 }

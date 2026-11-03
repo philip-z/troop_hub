@@ -64,8 +64,7 @@ function loadTemplates(forceRefresh) {
   const token = leaderIdToken;
   const cached = forceRefresh ? null : cachedTemplates();
   if (cached) { applyTemplates(cached); return; }
-  fetch(APPS_SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: 'listTripTemplates', idToken: token }) })
-    .then(res => res.json())
+  TroopOffline.send(APPS_SCRIPT_URL, { action: 'listTripTemplates', idToken: token })
     .then(r => {
       if (token !== leaderIdToken || r.status !== 'success') return;
       applyTemplates(r.trips);
@@ -119,8 +118,7 @@ function submitTrip(e) {
   btn.disabled = true;
   setMessage('Adding trip...', false);
 
-  fetch(APPS_SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) })
-    .then(res => res.json())
+  TroopOffline.send(APPS_SCRIPT_URL, payload)
     .then(r => {
       if (r.status === 'success') {
         setMessage('Trip added.', false);

@@ -41,8 +41,8 @@ var FORM_VERSION = '2026-10-26';
 function permissionTripConfig_(tripId) {
   var ss = getSpreadsheet_('trips');
   var trip = getTripConfig_(ss, tripId);
-  if (!trip) return { status: 'error', code: 'not_found', message: 'Trip not found.' };
-  if (!isTruthy_(trip.acceptingResponses)) return { status: 'error', code: 'closed', message: 'This trip is not accepting permission slips.' };
+  if (!trip) return errorReply_('not_found', 'Trip not found.');
+  if (!isTruthy_(trip.acceptingResponses)) return errorReply_('closed', 'This trip is not accepting permission slips.');
   return trip;
 }
 
@@ -59,30 +59,25 @@ function handlePermissionPost_(raw, data) {
 
   if (data.action === 'saveProfile') {
     var writer = profileUser_(data.idToken);
-    if (!writer) { logEvent_('saveProfile unauthorized', 'no verified email'); return jsonOut_({ status: 'error', message: 'unauthorized' }); }
+    if (!writer) { logEvent_('saveProfile unauthorized', 'no verified email'); return jsonOut_(errorReply_('', 'unauthorized')); }
     var saved = saveProfile_(data.kind, writer.email, data.profileData);
     logEvent_('saveProfile ' + (saved.status === 'success' ? 'ok' : 'rejected'), data.kind + ' fields=' + Object.keys(data.profileData || {}).length + (saved.message ? ' ' + saved.message : ''));
     return jsonOut_(saved);
   }
 
   // The slip page's start-up in one call: the trip (when it isn't already saved from the hub)
-  // and this person's saved profiles. The trip part is the same answer slipTrip gives.
+  // and this person's saved profiles. The trip part is permissionTripConfig_'s answer.
   if (data.action === 'slipLoad') {
     var loader = profileUser_(data.idToken);
-    if (!loader) return jsonOut_({ status: 'error', code: 'signin', message: 'Please sign in to view this trip.' });
+    if (!loader) return jsonOut_(errorReply_('signin', 'Please sign in to view this trip.'));
     var loaded = { status: 'success', profiles: getUserProfiles_(loader.email) };
     if (data.tripId) loaded.trip = permissionTripConfig_(data.tripId);
     return jsonOut_(loaded);
   }
 
-  if (data.action === 'slipTrip') {
-    if (!verifyGoogleToken_(data.idToken)) return jsonOut_({ status: 'error', code: 'signin', message: 'Please sign in to view this trip.' });
-    return jsonOut_(permissionTripConfig_(data.tripId));
-  }
-
   // SUBMISSION (sign-in required, same as viewing the trip).
   if (!verifyGoogleToken_(data._idToken)) {
-    return jsonOut_({ status: 'error', code: 'signin', message: 'Your sign-in has expired. Please sign in again; your entries are still on the form.' });
+    return jsonOut_(errorReply_('signin', 'Your sign-in has expired. Please sign in again; your entries are still on the form.'));
   }
   // Soft anti-spam: trim and flag, never reject.
   var flags = [];
@@ -106,11 +101,11 @@ function handlePermissionPost_(raw, data) {
 
   var ss = getSpreadsheet_('trips');
   var trip = getTripConfig_(ss, submittedTripId);
-  if (!trip) return jsonOut_({ status: 'error', code: 'not_found', message: 'Trip not found.' });
+  if (!trip) return jsonOut_(errorReply_('not_found', 'Trip not found.'));
   if (!isTruthy_(trip.acceptingResponses)) {
     // A slip signed while offline can reach the server after the trip stopped taking slips. It was
     // signed in time, so it is kept and flagged rather than lost.
-    if (!slipMeta.late) return jsonOut_({ status: 'error', code: 'closed', message: 'This trip is no longer accepting permission slips.' });
+    if (!slipMeta.late) return jsonOut_(errorReply_('closed', 'This trip is no longer accepting permission slips.'));
     flags.push('Trip closed before the slip was sent');
     logEvent_('late slip accepted', 'trip ' + trip.tripId + ' closed, signed ' + slipMeta.enteredAt.toISOString());
   }
@@ -355,16 +350,16 @@ function getUserProfiles_(email) {
 // Saves (creates or updates) the writer's profile of this kind. Returns the response object.
 function saveProfile_(kind, writerEmail, profileData) {
   var spec = Object.prototype.hasOwnProperty.call(SLIP_KINDS, String(kind)) ? SLIP_KINDS[String(kind)] : null;
-  if (!spec) return { status: 'error', code: 'invalid', message: 'Unknown profile type.' };
+  if (!spec) return errorReply_('invalid', 'Unknown profile type.');
   var clean = cleanRecordFields_(profileData, [], { textCells: true });
-  if (clean.error) return { status: 'error', code: 'invalid', message: clean.error };
+  if (clean.error) return errorReply_('invalid', clean.error);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var sheet = getOrCreateSheet_(getSpreadsheet_('trips'), spec.profileTab, true);
     var plan = planProfileSave_(sheetGrid_(sheet), spec, writerEmail, clean.fields);
-    if (plan.error) return { status: 'error', code: 'invalid', message: plan.error };
+    if (plan.error) return errorReply_('invalid', plan.error);
 
     var before = getSheetHeaders_(sheet);
     ensureSheetHeaders_(sheet, plan.required);
